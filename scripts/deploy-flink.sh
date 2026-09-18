@@ -129,11 +129,27 @@ deploy_statement("job-gempa-correlated-alerts", sql_03, is_job=True)
 
 # 4. Deploy Tsunami Detection
 print("\n" + "="*50)
-print("🌊 [4/4] Deploying Tsunami Detection Job (flink/04_tsunami_detection.sql)")
+print("🌊 [4/6] Deploying Tsunami Detection Job (flink/04_tsunami_detection.sql)")
 print("="*50)
 with open("flink/04_tsunami_detection.sql") as f:
     sql_04 = " ".join([l for l in f.read().splitlines() if not l.strip().startswith("--")])
 deploy_statement("job-gempa-tsunami-detection", sql_04, is_job=True)
+
+# 5. Deploy Cascading Incident Correlator
+print("\n" + "="*50)
+print("🌋 [5/6] Deploying Cascading Incident Correlator (flink/05_incident_correlator.sql)")
+print("="*50)
+with open("flink/05_incident_correlator.sql") as f:
+    sql_05 = " ".join([l for l in f.read().splitlines() if not l.strip().startswith("--")])
+deploy_statement("job-gempa-incident-correlator", sql_05, is_job=True)
+
+# 6. Deploy Tactical Response Generator
+print("\n" + "="*50)
+print("⚡ [6/6] Deploying Tactical Response Generator (flink/06_response_generator.sql)")
+print("="*50)
+with open("flink/06_response_generator.sql") as f:
+    sql_06 = " ".join([l for l in f.read().splitlines() if not l.strip().startswith("--")])
+deploy_statement("job-gempa-response-generator", sql_06, is_job=True)
 
 EOF
 

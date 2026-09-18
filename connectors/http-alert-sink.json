@@ -1,0 +1,18 @@
+{
+  "name": "HttpSink_DisasterAlerts",
+  "config": {
+    "connector.class": "HttpSink",
+    "name": "HttpSink_DisasterAlerts",
+    "kafka.auth.mode": "KAFKA_API_KEY",
+    "kafka.api.key": "${KAFKA_API_KEY}",
+    "kafka.api.secret": "${KAFKA_API_SECRET}",
+    "topics": "gempa.correlated_alerts,gempa.tsunami_scenarios",
+    "http.api.url": "${ALERT_WEBHOOK_URL}",
+    "request.method": "POST",
+    "headers": "Content-Type:application/json|X-System:InaTEWS-Sentinel",
+    "input.data.format": "JSON",
+    "tasks.max": "1",
+    "reporter.error.topic.name": "gempa.connector_errors",
+    "reporter.result.topic.name": "gempa.connector_success"
+  }
+}

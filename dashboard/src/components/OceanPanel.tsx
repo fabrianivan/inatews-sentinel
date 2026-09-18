@@ -4,6 +4,7 @@ import type { TsunamiScenario } from '@/lib/types';
 
 interface OceanPanelProps {
   tsunami: TsunamiScenario | null;
+  isReal?: boolean;
 }
 
 const IOC_STATIONS = [
@@ -29,7 +30,7 @@ const IOC_STATIONS = [
   { code: 'jayp', name: 'Jayapura, Papua', type: 'Tide Gauge', lat: -2.53, lon: 140.71, status: 'OPERATIONAL', level: '0.98m', trend: 'NORMAL' },
 ];
 
-export default function OceanPanel({ tsunami }: OceanPanelProps) {
+export default function OceanPanel({ tsunami, isReal = false }: OceanPanelProps) {
   return (
     <div className="ocean-panel">
       {/* Header Info */}
@@ -71,6 +72,37 @@ export default function OceanPanel({ tsunami }: OceanPanelProps) {
               {tsunami?.active ? '🚨 ANOMALI GELOMBANG' : '✓ AMAN (NOMINAL)'}
             </span>
           </div>
+        </div>
+
+        {/* Real Mode Telemetry Context Banner */}
+        <div
+          style={{
+            marginTop: '12px',
+            padding: '10px 14px',
+            borderRadius: '6px',
+            background: tsunami?.active ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.08)',
+            border: `1px solid ${tsunami?.active ? 'rgba(239, 68, 68, 0.4)' : 'rgba(16, 185, 129, 0.25)'}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            fontSize: '11.5px',
+            gap: '10px',
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span>{tsunami?.active ? '🚨' : '🛡️'}</span>
+            <span style={{ color: tsunami?.active ? '#fca5a5' : '#a7f3d0' }}>
+              {tsunami?.active
+                ? `Peringatan Tsunami Aktif: Anomali muka air laut terdeteksi (+${tsunami.wave_anomaly?.toFixed(2)}m) pada ${tsunami.sensor_id}. Zonasi pesisir terdampak dan kerusakan infrastruktur aktif ditampilkan.`
+                : isReal
+                ? 'Status Maritim Aman (Riil): Tidak ada peringatan tsunami dari BMKG InaTEWS. Jika terjadi gempa M≥6.8 atau peringatan tsunami BMKG, sistem secara otomatis menampilkan zonasi terdampak dan estimasi kerusakan infrastruktur.'
+                : 'Skenario Siaga Maritim: Data stasiun pasang surut laut IOC UNESCO dan buoy InaTEWS aktif termonitor.'}
+            </span>
+          </div>
+          <span style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 600 }}>
+            {isReal ? 'MODE DATA RIIL BMKG' : 'MODE SIMULASI DARURAT'}
+          </span>
         </div>
       </div>
 

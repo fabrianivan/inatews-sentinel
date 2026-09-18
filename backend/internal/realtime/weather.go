@@ -69,7 +69,7 @@ func (w *WeatherClient) FetchStationWeather(lat, lon float64, stationName string
 	windDirStr := degreesToCompass(data.CurrentWeather.Winddirection)
 	pressure := 1010.0 + (data.CurrentWeather.Windspeed * -0.2) // approximated atmospheric pressure
 
-	return &models.WeatherEvent{
+	event := &models.WeatherEvent{
 		Type:                "WEATHER",
 		AtmosphericPressure: pressure,
 		WindSpeed:           data.CurrentWeather.Windspeed,
@@ -78,7 +78,9 @@ func (w *WeatherClient) FetchStationWeather(lat, lon float64, stationName string
 		Temperature:         data.CurrentWeather.Temperature,
 		Humidity:            75.0,
 		Timestamp:           time.Now(),
-	}, nil
+	}
+	event.Anomaly, event.AnomalySeverity = models.ClassifyWeatherAnomaly(*event)
+	return event, nil
 }
 
 func degreesToCompass(deg float64) string {

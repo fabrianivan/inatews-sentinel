@@ -3,13 +3,15 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import type { LifecyclePhase, LiveEvent, RealtimeEarthquakesData, VolcanoEruption } from '@/lib/types';
+import type { LifecyclePhase, LiveEvent, RealtimeEarthquakesData, VolcanoEruption, TsunamiScenario, IncidentEvent } from '@/lib/types';
 import { INDONESIAN_VOLCANOES, findVolcanoLocation, getVolcanicAshTrajectory } from '@/lib/volcanoData';
 
 interface MapProps {
   activityLevel?: number;
   tsunamiActive?: boolean;
+  tsunamiScenario?: TsunamiScenario | null;
   isSimulasi?: boolean;
+  activeIncident?: IncidentEvent | null;
   phase?: LifecyclePhase | null;
   events?: LiveEvent[];
   realQuakes?: RealtimeEarthquakesData | null;
@@ -120,7 +122,9 @@ const TSUNAMI_BUOYS = [
 export default function Map({
   activityLevel = 15,
   tsunamiActive = false,
+  tsunamiScenario = null,
   isSimulasi = false,
+  activeIncident = null,
   phase,
   events,
   realQuakes,
@@ -135,6 +139,7 @@ export default function Map({
   const quakeLayerRef = useRef<L.LayerGroup | null>(null);
   const volcanoLayerRef = useRef<L.LayerGroup | null>(null);
   const ashLayerRef = useRef<L.LayerGroup | null>(null);
+  const tsunamiImpactLayerRef = useRef<L.LayerGroup | null>(null);
   const sundaLayerRef = useRef<L.LayerGroup | null>(null);
   const javaTrenchLayerRef = useRef<L.LayerGroup | null>(null);
   const paluKoroLayerRef = useRef<L.LayerGroup | null>(null);
@@ -152,6 +157,7 @@ export default function Map({
     ash: boolean;
     stations: boolean;
     buoys: boolean;
+    tsunamiImpact: boolean;
   }>({
     sundaMegathrust: true,
     javaTrench: true,
@@ -160,7 +166,24 @@ export default function Map({
     ash: true,
     stations: true,
     buoys: true,
+    tsunamiImpact: true,
   });
+
+  const [impactHudData, setImpactHudData] = useState<{
+    active: boolean;
+    region: string;
+    epicenter: [number, number];
+    magnitude: number;
+    depth: number;
+    mmi: string;
+    tsunamiWave: string;
+    population: number;
+    infrastructure: number;
+    stage: string;
+    status: string;
+  } | null>(null);
+
+  const [isHudCollapsed, setIsHudCollapsed] = useState<boolean>(false);
 
   // 1. Initialize Leaflet Map
   useEffect(() => {
@@ -334,6 +357,8 @@ export default function Map({
     volcanoLayerRef.current = L.layerGroup().addTo(map);
     // Layer group for volcanic ash dispersion simulation
     ashLayerRef.current = L.layerGroup().addTo(map);
+    // Layer group for simulated tsunami inundation & critical infrastructure impacts
+    tsunamiImpactLayerRef.current = L.layerGroup().addTo(map);
 
     mapRef.current = map;
 
@@ -674,7 +699,7 @@ export default function Map({
               cursor: pointer;
               text-align: center;
             ">
-              🔬 Analisis Citra Seismogram
+              🔬 Analisis Citra Seismograf
             </button>
           ` : ''}
         </div>
@@ -718,7 +743,7 @@ export default function Map({
     if (!activeLayer.ash) return;
 
     // Show ash plume if simulation is active OR if an active volcano is selected
-    const shouldShowAsh = isSimulasi || tsunamiActive || Boolean(selectedVolcano && selectedVolcano !== 'BMKG_REGIONAL');
+    const shouldShowAsh = isSimulasi || Boolean(tsunamiActive && tsunamiScenario?.active) || Boolean(selectedVolcano && selectedVolcano !== 'BMKG_REGIONAL');
     if (!shouldShowAsh) return;
 
     const targetName = (selectedVolcano && selectedVolcano !== 'BMKG_REGIONAL') ? selectedVolcano : 'Anak Krakatau';
@@ -784,6 +809,29 @@ export default function Map({
       fillOpacity: 0.55,
     }).addTo(layer);
 
+    // Lingkaran Zona Merah Bahaya Letusan Kawah (Radius 5 km KRB III)
+    const volcanoRedCircle = L.circle([lat0, lon0], {
+      radius: 5000,
+      color: '#ef4444',
+      weight: 2.5,
+      dashArray: '5, 5',
+      fillColor: '#ef4444',
+      fillOpacity: 0.38,
+    }).addTo(layer);
+
+    volcanoRedCircle.bindPopup(`
+      <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a; min-width: 230px;">
+        <div style="background: #ef4444; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 800; font-size: 11px; margin-bottom: 6px; display: inline-block;">
+          ⚠️ ZONA MERAH LINGKARAN BAHAYA KAWAH (RADIUS 5 KM)
+        </div><br/>
+        <strong style="font-size: 13px; color: #0f172a;">Gunung ${geo.name}</strong><br/>
+        <div style="margin: 6px 0; font-size: 11px; line-height: 1.5; color: #334155;">
+          🚫 <strong>Status:</strong> Kawasan Rawan Bencana (KRB III). Radius 5 km steril dari pemukiman.<br/>
+          💨 <strong>Arah Sebaran Abu:</strong> Menyebar ke sektor ${ash.windDirectionCardinal} (${ash.windDirectionDeg}°) mengikuti arah angin.
+        </div>
+      </div>
+    `);
+
     // Popup for the ash dispersion cloud
     const ashPopup = `
       <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a; min-width: 260px;">
@@ -845,6 +893,605 @@ export default function Map({
     });
   }, [isSimulasi, tsunamiActive, selectedVolcano, activeLayer.ash]);
 
+  // 3.2 Plot Animated Impacted Area (Seismic Waves, Isoseismal MMI Zones & Coastal Tsunami Inundation)
+  useEffect(() => {
+    const map = mapRef.current;
+    const layer = tsunamiImpactLayerRef.current;
+    if (!map || !layer) return;
+
+    layer.clearLayers();
+    if (!activeLayer.tsunamiImpact) {
+      setImpactHudData(null);
+      return;
+    }
+
+    const isImpactActive =
+      isSimulasi ||
+      (Boolean(tsunamiActive) && Boolean(tsunamiScenario?.active));
+
+    if (!isImpactActive) {
+      setImpactHudData(null);
+      return;
+    }
+
+    let epicLat = -9.15;
+    let epicLon = 109.52;
+    let mag = 7.8;
+    let depthKm = 15;
+    let regionText = 'Java Trench (Cilacap - Pangandaran)';
+    let mmiCode = 'VII';
+    let tsunamiWave = '4.5m';
+    let popExposed = 1842000;
+    let infraCount = 37;
+    let stageName = activeIncident?.cascading_stage || 'SEISMIC_PROPAGATION';
+    let statusText = activeIncident?.status || (isSimulasi ? 'SIMULASI AKTIF' : 'TERDETEKSI');
+
+    if (activeIncident?.latitude && activeIncident?.longitude) {
+      epicLat = activeIncident.latitude;
+      epicLon = activeIncident.longitude;
+      mag = activeIncident.magnitude || 7.8;
+      depthKm = activeIncident.depth || 15;
+      regionText = activeIncident.region || regionText;
+      mmiCode = activeIncident.seismic_intensity || 'VII';
+      popExposed = activeIncident.population_exposed || popExposed;
+      infraCount = activeIncident.critical_infrastructure || infraCount;
+      tsunamiWave = activeIncident.tsunami_risk === 'HIGH' ? '4.5 - 6.0m' : activeIncident.tsunami_risk === 'CRITICAL' ? '8.0m+' : '2.0m';
+    }
+
+    setImpactHudData({
+      active: true,
+      region: regionText,
+      epicenter: [epicLat, epicLon],
+      magnitude: mag,
+      depth: depthKm,
+      mmi: mmiCode,
+      tsunamiWave,
+      population: popExposed,
+      infrastructure: infraCount,
+      stage: stageName,
+      status: statusText,
+    });
+
+    // 1. Plot Epicenter Seismic Shockwaves (P-Wave, S-Wave & Rayleigh Wavefronts)
+    const shockwaveIcon = L.divIcon({
+      className: 'seismic-epicenter-shockwave-icon',
+      html: `
+        <div class="seismic-epicenter-shockwave">
+          <div class="seismic-wave-p" title="Gelombang P (Primer) - Kecepatan rambat ~7.2 km/s"></div>
+          <div class="seismic-wave-s" title="Gelombang S (Sekunder/Guncangan Destruktif) - Kecepatan rambat ~4.1 km/s"></div>
+          <div class="seismic-wave-surface" title="Gelombang Permukaan (Rayleigh/Love) - Amplitudo Maksimum"></div>
+          <div class="seismic-epicenter-core" title="Pusat Episenter Gempa: M${mag.toFixed(1)}">
+            M${mag.toFixed(1)}
+          </div>
+        </div>
+      `,
+      iconSize: [400, 400],
+      iconAnchor: [200, 200],
+    });
+
+    L.marker([epicLat, epicLon], { icon: shockwaveIcon, zIndexOffset: 950 })
+      .addTo(layer)
+      .bindPopup(`
+        <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a; min-width: 230px;">
+          <div style="background: #dc2626; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 800; font-size: 11px; margin-bottom: 6px; display: inline-block;">
+            ⚡ EPISENTER GUNCANGAN SEISMIK • M${mag.toFixed(1)}
+          </div><br/>
+          <strong style="font-size: 13px; color: #0f172a;">${regionText}</strong><br/>
+          <span style="font-size: 11px; color: #475569;">Kedalaman: ${depthKm} km • Intensitas: ${mmiCode} MMI</span><br/>
+          <div style="margin-top: 6px; font-size: 10.5px; color: #0284c7; line-height: 1.4;">
+            🌊 <em>Gelombang seismik P dan S sedang merambat keluar dari pusat patahan secara real-time.</em>
+          </div>
+        </div>
+      `);
+
+    // 2. Plot Isoseismal Ground Shaking Zones (Zonasi Guncangan MMI)
+    // Critical Zone (MMI VIII - IX)
+    L.circle([epicLat, epicLon], {
+      radius: 48000,
+      color: '#dc2626',
+      weight: 2.5,
+      dashArray: '4, 6',
+      fillColor: '#991b1b',
+      fillOpacity: 0.32,
+      className: 'leaflet-isoseismal-zone-critical',
+    })
+      .addTo(layer)
+      .bindPopup(`
+        <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a; min-width: 230px;">
+          <div style="background: #dc2626; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 800; font-size: 11px; margin-bottom: 4px; display: inline-block;">
+            🔴 ZONA GUNCANGAN DESTRUKTIF (MMI VIII - IX)
+          </div><br/>
+          <strong>Radius: ±48 km dari Episenter</strong><br/>
+          <div style="font-size: 11px; color: #334155; margin-top: 4px; line-height: 1.4;">
+            ⚠️ <strong>Dampak:</strong> Kerusakan berat pada bangunan struktural, fondasi retak parah, dan potensi likuifaksi tanah.<br/>
+            📊 <strong>Perkiraan PGA:</strong> 0.55g - 0.85g
+          </div>
+        </div>
+      `);
+
+    // Strong Zone (MMI VII)
+    L.circle([epicLat, epicLon], {
+      radius: 125000,
+      color: '#ea580c',
+      weight: 2,
+      dashArray: '6, 8',
+      fillColor: '#ea580c',
+      fillOpacity: 0.18,
+      className: 'leaflet-isoseismal-zone-strong',
+    })
+      .addTo(layer)
+      .bindPopup(`
+        <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a; min-width: 230px;">
+          <div style="background: #ea580c; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 800; font-size: 11px; margin-bottom: 4px; display: inline-block;">
+            🟠 ZONA GUNCANGAN KUAT (MMI VII)
+          </div><br/>
+          <strong>Radius: ±125 km dari Episenter</strong><br/>
+          <div style="font-size: 11px; color: #334155; margin-top: 4px; line-height: 1.4;">
+            ⚠️ <strong>Dampak:</strong> Dinding retak, perabot rumah berjatuhan, cerobong patah.<br/>
+            📊 <strong>Perkiraan PGA:</strong> 0.25g - 0.45g
+          </div>
+        </div>
+      `);
+
+    // Felt Zone (MMI V - VI)
+    L.circle([epicLat, epicLon], {
+      radius: 260000,
+      color: '#eab308',
+      weight: 1.5,
+      dashArray: '8, 10',
+      fillColor: '#ca8a04',
+      fillOpacity: 0.08,
+    })
+      .addTo(layer)
+      .bindPopup(`
+        <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a; min-width: 230px;">
+          <div style="background: #ca8a04; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 800; font-size: 11px; margin-bottom: 4px; display: inline-block;">
+            🟡 ZONA GUNCANGAN TERASA (MMI V - VI)
+          </div><br/>
+          <strong>Radius: ±260 km dari Episenter</strong><br/>
+          <div style="font-size: 11px; color: #334155; margin-top: 4px; line-height: 1.4;">
+            ℹ️ <strong>Dampak:</strong> Dirasakan oleh hampir semua orang, jendela bergetar, guncangan nyata.<br/>
+            📊 <strong>Perkiraan PGA:</strong> 0.08g - 0.20g
+          </div>
+        </div>
+      `);
+
+    // 3. Tsunami Wavefront Arcs (Rambatan Gelombang Tsunami ke Arah Pesisir)
+    const waveArcIcon = L.divIcon({
+      className: 'tsunami-wavefront-arc-wrapper',
+      html: `
+        <div class="tsunami-wavefront-arc">
+          <div class="tsunami-crest-ripple-1"></div>
+          <div class="tsunami-crest-ripple-2"></div>
+          <div class="tsunami-crest-ripple-3"></div>
+        </div>
+      `,
+      iconSize: [160, 160],
+      iconAnchor: [80, 80],
+    });
+
+    // Offshore wave propagation position midway towards land
+    const midOffshoreLat = epicLat * 0.7 + (-7.6) * 0.3;
+    const midOffshoreLon = epicLon * 0.7 + (108.6) * 0.3;
+    L.marker([midOffshoreLat, midOffshoreLon], { icon: waveArcIcon, zIndexOffset: 920 }).addTo(layer);
+
+    // A. Tsunami Coastal Impact Sectors (Lingkaran Zona Merah & Bahaya Pesisir)
+    const hasDynamicZones = Boolean(
+      tsunamiScenario?.affected_zone_details && tsunamiScenario.affected_zone_details.length > 0
+    );
+
+    if (hasDynamicZones && tsunamiScenario?.affected_zone_details) {
+      tsunamiScenario.affected_zone_details.forEach((sec) => {
+        const isAwas = sec.status === 'AWAS';
+        const isSiaga = sec.status === 'SIAGA';
+        const color = isAwas ? '#ef4444' : isSiaga ? '#f97316' : '#eab308';
+        const radius = isAwas ? 25000 : isSiaga ? 18000 : 14000;
+
+        // Calculate center coordinate (coords or polygon centroid)
+        const center: [number, number] = sec.coords
+          ? sec.coords
+          : (sec.polygon && sec.polygon.length > 0)
+          ? [
+              sec.polygon.reduce((sum, pt) => sum + pt[0], 0) / sec.polygon.length,
+              sec.polygon.reduce((sum, pt) => sum + pt[1], 0) / sec.polygon.length,
+            ]
+          : [-6.5, 105.5];
+
+        const popupHtml = `
+          <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a; min-width: 240px;">
+            <div style="background: ${color}; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 800; font-size: 11px; margin-bottom: 6px; display: inline-block;">
+              ${isAwas ? '🔴 ZONA MERAH LINGKARAN BAHAYA TSUNAMI (AWAS)' : `ZONA LINGKARAN BAHAYA TSUNAMI (${sec.status})`}
+            </div><br/>
+            <strong style="font-size: 13px; color: #0f172a;">${sec.zone}</strong><br/>
+            <span style="font-size: 10.5px; color: #64748b;">Provinsi: ${sec.province} • Radius: ±${Math.round(radius / 1000)} km</span>
+            <div style="margin: 6px 0; font-size: 11px; line-height: 1.5; color: #334155;">
+              ⏱ <strong>Estimasi Tiba (ETA):</strong> ${sec.estimated_eta}<br/>
+              🌊 <strong>Tinggi Gelombang:</strong> ${sec.estimated_wave_height}<br/>
+              🌊 <strong>Limpasan Darat:</strong> ${sec.inundation_depth}<br/>
+              👥 <strong>Populasi Berisiko:</strong> ${sec.population_at_risk}<br/>
+              🏔️ <strong>Elevasi Aman:</strong> <span style="color: #059669; font-weight: 700;">${sec.safe_elevation}</span>
+            </div>
+          </div>
+        `;
+
+        // Every red and warning hazard zone is strictly a CIRCLE
+        L.circle(center, {
+          radius,
+          color,
+          weight: isAwas ? 2.5 : 2,
+          dashArray: '6, 6',
+          fillColor: color,
+          fillOpacity: isAwas ? 0.35 : 0.25,
+        })
+          .addTo(layer)
+          .bindPopup(popupHtml);
+
+        // For AWAS (Zona Merah), draw an inner critical danger ring
+        if (isAwas) {
+          L.circle(center, {
+            radius: Math.round(radius * 0.45),
+            color: '#dc2626',
+            weight: 1.5,
+            fillColor: '#991b1b',
+            fillOpacity: 0.48,
+          })
+            .addTo(layer)
+            .bindPopup(popupHtml);
+        }
+
+        const beaconIcon = L.divIcon({
+          className: 'coastal-beacon-wrapper',
+          html: `
+            <div class="coastal-hazard-beacon">
+              <div class="coastal-beacon-ring ${isAwas ? '' : 'coastal-beacon-ring--siaga'}"></div>
+              <div class="coastal-beacon-pin ${isAwas ? '' : 'coastal-beacon-pin--siaga'}">
+                🚨
+              </div>
+            </div>
+          `,
+          iconSize: [32, 32],
+          iconAnchor: [16, 16],
+        });
+        L.marker(center, { icon: beaconIcon, zIndexOffset: 980 })
+          .addTo(layer)
+          .bindPopup(popupHtml);
+      });
+    } else {
+      // Static fallback simulation sectors (Lingkaran Zona Merah Selat Sunda & Jawa)
+      const IMPACT_COASTAL_SECTORS = [
+        {
+          name: 'Pesisir Pandeglang & Ujung Kulon',
+          status: 'AWAS',
+          eta: '18 Menit',
+          waveHeight: '4.2 - 5.5m',
+          color: '#ef4444',
+          center: [-6.85, 105.45] as [number, number],
+          radius: 25000,
+        },
+        {
+          name: 'Kalianda & Pesisir Lampung Selatan',
+          status: 'AWAS',
+          eta: '22 Menit',
+          waveHeight: '3.5 - 4.8m',
+          color: '#ef4444',
+          center: [-5.75, 105.58] as [number, number],
+          radius: 22000,
+        },
+        {
+          name: 'Pesisir Anyer & Carita',
+          status: 'SIAGA',
+          eta: '27 Menit',
+          waveHeight: '2.8 - 3.6m',
+          color: '#f97316',
+          center: [-6.20, 105.82] as [number, number],
+          radius: 18000,
+        },
+        {
+          name: 'Teluk Semangka & Tanggamus',
+          status: 'SIAGA',
+          eta: '31 Menit',
+          waveHeight: '2.2 - 3.1m',
+          color: '#f97316',
+          center: [-5.55, 104.70] as [number, number],
+          radius: 18000,
+        },
+        {
+          name: 'Pesisir Cilacap & Teluk Penyu',
+          status: 'WASPADA',
+          eta: '46 Menit',
+          waveHeight: '1.2 - 2.0m',
+          color: '#eab308',
+          center: [-7.74, 109.02] as [number, number],
+          radius: 14000,
+        },
+      ];
+
+      IMPACT_COASTAL_SECTORS.forEach((sec) => {
+        const isAwas = sec.status === 'AWAS';
+        const popupHtml = `
+          <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a; min-width: 230px;">
+            <div style="background: ${sec.color}; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 800; font-size: 11px; margin-bottom: 6px; display: inline-block;">
+              ${isAwas ? '🔴 ZONA MERAH LINGKARAN BAHAYA TSUNAMI (AWAS)' : `ZONA LINGKARAN BAHAYA TSUNAMI (${sec.status})`}
+            </div><br/>
+            <strong style="font-size: 13px; color: #0f172a;">${sec.name}</strong><br/>
+            <div style="margin: 6px 0; font-size: 11px; line-height: 1.5; color: #334155;">
+              ⏱ <strong>Estimasi Tiba (ETA):</strong> ${sec.eta}<br/>
+              🌊 <strong>Perkiraan Tinggi Gelombang:</strong> ${sec.waveHeight}<br/>
+              ⚠️ <strong>Radius Bahaya:</strong> ±${Math.round(sec.radius / 1000)} km Lingkaran Pesisir<br/>
+              🚨 <strong>SOP Evakuasi:</strong> Segera evakuasi ke ketinggian >20 meter dpl
+            </div>
+          </div>
+        `;
+
+        L.circle(sec.center, {
+          radius: sec.radius,
+          color: sec.color,
+          weight: isAwas ? 2.5 : 2,
+          dashArray: '6, 6',
+          fillColor: sec.color,
+          fillOpacity: isAwas ? 0.35 : 0.25,
+        })
+          .addTo(layer)
+          .bindPopup(popupHtml);
+
+        if (isAwas) {
+          L.circle(sec.center, {
+            radius: Math.round(sec.radius * 0.45),
+            color: '#dc2626',
+            weight: 1.5,
+            fillColor: '#991b1b',
+            fillOpacity: 0.48,
+          })
+            .addTo(layer)
+            .bindPopup(popupHtml);
+        }
+
+        const beaconIcon = L.divIcon({
+          className: 'coastal-beacon-wrapper',
+          html: `
+            <div class="coastal-hazard-beacon">
+              <div class="coastal-beacon-ring ${isAwas ? '' : 'coastal-beacon-ring--siaga'}"></div>
+              <div class="coastal-beacon-pin ${isAwas ? '' : 'coastal-beacon-pin--siaga'}">
+                🚨
+              </div>
+            </div>
+          `,
+          iconSize: [32, 32],
+          iconAnchor: [16, 16],
+        });
+        L.marker(sec.center, { icon: beaconIcon, zIndexOffset: 980 })
+          .addTo(layer)
+          .bindPopup(popupHtml);
+      });
+    }
+
+    // B. Critical Infrastructure Damage Markers
+    const hasDynamicInfra = Boolean(
+      tsunamiScenario?.infrastructure_impacts && tsunamiScenario.infrastructure_impacts.length > 0
+    );
+
+    if (hasDynamicInfra && tsunamiScenario?.infrastructure_impacts) {
+      tsunamiScenario.infrastructure_impacts.forEach((inf) => {
+        if (!inf.coords) return;
+        const color = inf.damage_level === 'HEAVY' ? '#ef4444' : inf.damage_level === 'MODERATE' ? '#f97316' : '#eab308';
+        const icon = inf.icon || '🏗️';
+        const damageText = inf.damage_level === 'HEAVY' ? 'RUSAK BERAT' : inf.damage_level === 'MODERATE' ? 'RUSAK SEDANG' : 'RUSAK RINGAN';
+
+        const infraIcon = L.divIcon({
+          className: 'infra-damage-marker',
+          html: `
+            <div style="
+              position: relative;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              width: 30px;
+              height: 30px;
+              border-radius: 6px;
+              background: rgba(15, 23, 42, 0.95);
+              border: 2px solid ${color};
+              box-shadow: 0 0 12px ${color};
+              font-size: 14px;
+              cursor: pointer;
+            ">
+              <span>${icon}</span>
+              <span style="
+                position: absolute;
+                top: -6px;
+                right: -6px;
+                width: 12px;
+                height: 12px;
+                border-radius: 50%;
+                background: ${color};
+                border: 1px solid #fff;
+                font-size: 8px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #fff;
+                font-weight: 800;
+              ">!</span>
+            </div>
+          `,
+          iconSize: [30, 30],
+          iconAnchor: [15, 15],
+        });
+
+        L.marker(inf.coords, { icon: infraIcon, zIndexOffset: 850 })
+          .addTo(layer)
+          .bindPopup(`
+            <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a; min-width: 240px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+                <strong style="font-size: 13px; color: #0f172a;">${icon} ${inf.facility}</strong>
+                <span style="background: ${color}; color: white; padding: 2px 6px; border-radius: 3px; font-weight: 800; font-size: 9px;">
+                  ${damageText}
+                </span>
+              </div>
+              <div style="font-size: 11px; color: #475569; margin-bottom: 4px;">
+                Kategori: <strong>${inf.type}</strong> • 📍 ${inf.location}
+              </div>
+              <div style="background: rgba(239, 68, 68, 0.08); border-left: 3px solid ${color}; padding: 6px; border-radius: 3px; font-size: 10.5px; margin-bottom: 6px;">
+                <strong>Estimasi Dampak:</strong><br/>
+                ${inf.loss_estimate}
+              </div>
+              <div style="font-size: 10.5px; color: #dc2626; margin-bottom: 3px;">
+                🛑 <strong>Operasional:</strong> ${inf.operational_status}
+              </div>
+              <div style="font-size: 10.5px; color: #0369a1;">
+                🛠️ <strong>Tindakan Darurat:</strong> ${inf.critical_action}
+              </div>
+            </div>
+          `);
+      });
+    } else {
+      const INFRASTRUCTURE_TARGETS = [
+        {
+          name: 'Pelabuhan Merak - Bakauheni',
+          type: 'Pelabuhan Utama',
+          pos: [-5.93, 105.99] as [number, number],
+          damage: 'RUSAK BERAT',
+          detail: 'Dermaga feri tergenang 2.5m, operasional ditutup total.',
+          action: 'Evakuasi kapal feri ke laut dalam (>200m).',
+          color: '#ef4444',
+          icon: '🚢',
+        },
+        {
+          name: 'PLTU Suralaya & Labuan',
+          type: 'Pembangkit Listrik',
+          pos: [-5.89, 106.03] as [number, number],
+          damage: 'RUSAK SEDANG',
+          detail: 'Intake air laut pendingin tersumbat puing banjir laut.',
+          action: 'Safe shutdown darurat & isolasi sistem transmisi.',
+          color: '#f97316',
+          icon: '⚡',
+        },
+        {
+          name: 'Jalan Raya Lintas Anyer - Carita',
+          type: 'Akses Jalur Evakuasi',
+          pos: [-6.15, 105.86] as [number, number],
+          damage: 'RUSAK BERAT',
+          detail: 'Terputus akibat genangan tsunami 1.8m & puing kayu.',
+          action: 'Gunakan jalur alternatif pedalaman Menes-Mandalawangi.',
+          color: '#ef4444',
+          icon: '🛣️',
+        },
+        {
+          name: 'BTS Pesisir Kalianda & Labuan',
+          type: 'Menara Telekomunikasi',
+          pos: [-5.73, 105.59] as [number, number],
+          damage: 'RUSAK SEDANG',
+          detail: '34 BTS pesisir padam listrik cadangan baterai.',
+          action: 'Aktivasi transmisi radio satelit BNPB & VHF darurat.',
+          color: '#f97316',
+          icon: '📡',
+        },
+      ];
+
+      INFRASTRUCTURE_TARGETS.forEach((inf) => {
+        const infraIcon = L.divIcon({
+          className: 'infra-damage-marker',
+          html: `
+            <div style="
+              position: relative;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              width: 30px;
+              height: 30px;
+              border-radius: 6px;
+              background: rgba(15, 23, 42, 0.95);
+              border: 2px solid ${inf.color};
+              box-shadow: 0 0 12px ${inf.color};
+              font-size: 14px;
+              cursor: pointer;
+            ">
+              <span>${inf.icon}</span>
+              <span style="
+                position: absolute;
+                top: -6px;
+                right: -6px;
+                width: 12px;
+                height: 12px;
+                border-radius: 50%;
+                background: ${inf.color};
+                border: 1px solid #fff;
+                font-size: 8px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #fff;
+                font-weight: 800;
+              ">!</span>
+            </div>
+          `,
+          iconSize: [30, 30],
+          iconAnchor: [15, 15],
+        });
+
+        L.marker(inf.pos, { icon: infraIcon, zIndexOffset: 850 })
+          .addTo(layer)
+          .bindPopup(`
+            <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a; min-width: 240px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+                <strong style="font-size: 13px; color: #0f172a;">${inf.icon} ${inf.name}</strong>
+                <span style="background: ${inf.color}; color: white; padding: 2px 6px; border-radius: 3px; font-weight: 800; font-size: 9px;">
+                  ${inf.damage}
+                </span>
+              </div>
+              <div style="font-size: 11px; color: #475569; margin-bottom: 4px;">
+                Kategori: <strong>${inf.type}</strong>
+              </div>
+              <div style="background: rgba(239, 68, 68, 0.08); border-left: 3px solid ${inf.color}; padding: 6px; border-radius: 3px; font-size: 10.5px; margin-bottom: 6px;">
+                <strong>Estimasi Kerusakan:</strong><br/>
+                ${inf.detail}
+              </div>
+              <div style="font-size: 10.5px; color: #0369a1;">
+                🛠️ <strong>Tindakan Darurat:</strong> ${inf.action}
+              </div>
+            </div>
+          `);
+      });
+    }
+  }, [isSimulasi, tsunamiActive, tsunamiScenario, activeIncident, activeLayer.tsunamiImpact]);
+
+  // 3.3 Auto flyTo camera to incident epicenter on escalation (simulation only)
+  useEffect(() => {
+    if (!mapRef.current) return;
+    if (
+      isSimulasi &&
+      activeIncident?.latitude &&
+      activeIncident?.longitude &&
+      (activeIncident.status === 'ESCALATING' ||
+        activeIncident.status === 'CRITICAL' ||
+        activeIncident.status === 'CONFIRMING')
+    ) {
+      mapRef.current.flyTo([activeIncident.latitude, activeIncident.longitude], 7, {
+        animate: true,
+        duration: 1.5,
+      });
+    }
+  }, [isSimulasi, activeIncident?.incident_id, activeIncident?.status, activeIncident?.latitude, activeIncident?.longitude]);
+
+  // 3.4 Explicit Reset Handler when exiting simulation mode
+  const prevSimulasiRef = useRef(isSimulasi);
+  useEffect(() => {
+    if (prevSimulasiRef.current && !isSimulasi) {
+      // User just exited simulation mode -> forcefully wipe out simulation layers
+      tsunamiImpactLayerRef.current?.clearLayers();
+      ashLayerRef.current?.clearLayers();
+      setImpactHudData(null);
+
+      if (mapRef.current) {
+        if (focusCoords) {
+          mapRef.current.flyTo([focusCoords.lat, focusCoords.lon], 7, { animate: true, duration: 1.2 });
+        } else {
+          mapRef.current.flyTo([-2.5, 118.0], 5, { animate: true, duration: 1.2 });
+        }
+      }
+    }
+    prevSimulasiRef.current = isSimulasi;
+  }, [isSimulasi, focusCoords]);
+
   // 4. Handle volcano selection camera flyTo
   useEffect(() => {
     if (!mapRef.current || !selectedVolcano) return;
@@ -901,6 +1548,144 @@ export default function Map({
         }}
       />
 
+      {/* Tactical Impact Radar HUD Overlay */}
+      {impactHudData && impactHudData.active && (
+        <div className={`impact-radar-hud ${isHudCollapsed ? 'impact-radar-hud--collapsed' : ''}`}>
+          <div className="impact-radar-hud__header">
+            <span className="impact-radar-hud__title">
+              🌋 RADAR WILAYAH TERDAMPAK
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span className="impact-radar-hud__badge">
+                {impactHudData.status}
+              </span>
+              <button
+                type="button"
+                className="hud-collapse-toggle-btn"
+                onClick={() => setIsHudCollapsed(!isHudCollapsed)}
+                title={isHudCollapsed ? 'Perbesar panel HUD' : 'Kecilkan panel HUD'}
+              >
+                {isHudCollapsed ? '▢ Perbesar' : '— Kecilkan'}
+              </button>
+            </div>
+          </div>
+
+          {!isHudCollapsed ? (
+            <>
+              <div className="impact-radar-hud__region">{impactHudData.region}</div>
+              <div className="impact-radar-hud__coords">
+                EPISENTER: {impactHudData.epicenter[0].toFixed(2)}°S, {impactHudData.epicenter[1].toFixed(2)}°E • M{impactHudData.magnitude.toFixed(1)} • {impactHudData.depth.toFixed(0)} km • {impactHudData.mmi} MMI
+              </div>
+              <div className="impact-radar-hud__stage">
+                ⚡ FASE DAMPAK: {impactHudData.stage.replace(/_/g, ' ')}
+              </div>
+              <div className="impact-radar-hud__grid">
+                <div className="impact-radar-hud__metric">
+                  <div className="impact-radar-hud__metric-label">Radius Guncangan</div>
+                  <div className="impact-radar-hud__metric-val impact-radar-hud__metric-val--warning">
+                    ±260 km
+                  </div>
+                </div>
+                <div className="impact-radar-hud__metric">
+                  <div className="impact-radar-hud__metric-label">Gelombang Tsunami</div>
+                  <div className="impact-radar-hud__metric-val impact-radar-hud__metric-val--critical">
+                    {impactHudData.tsunamiWave}
+                  </div>
+                </div>
+                <div className="impact-radar-hud__metric">
+                  <div className="impact-radar-hud__metric-label">Populasi Terpapar</div>
+                  <div className="impact-radar-hud__metric-val">
+                    {(impactHudData.population / 1000000).toFixed(2)}M Jiwa
+                  </div>
+                </div>
+                <div className="impact-radar-hud__metric">
+                  <div className="impact-radar-hud__metric-label">Infrastruktur Rusak</div>
+                  <div className="impact-radar-hud__metric-val impact-radar-hud__metric-val--critical">
+                    {impactHudData.infrastructure} Titik
+                  </div>
+                </div>
+              </div>
+
+              {/* Quick Camera Presets */}
+              <div className="impact-radar-hud__presets">
+                <span className="preset-label">KAMERA CEPAT:</span>
+                <button
+                  type="button"
+                  className="preset-btn"
+                  onClick={() => {
+                    if (mapRef.current && impactHudData) {
+                      mapRef.current.flyTo(impactHudData.epicenter, 7, { animate: true, duration: 1.2 });
+                    }
+                  }}
+                >
+                  🎯 Episenter
+                </button>
+                <button
+                  type="button"
+                  className="preset-btn"
+                  onClick={() => {
+                    if (mapRef.current) {
+                      mapRef.current.flyTo([-7.75, 108.9], 8, { animate: true, duration: 1.2 });
+                    }
+                  }}
+                >
+                  🌊 Pesisir
+                </button>
+                <button
+                  type="button"
+                  className="preset-btn"
+                  onClick={handleResetOverview}
+                >
+                  🇮🇩 Seluruh RI
+                </button>
+              </div>
+
+              <div className="impact-radar-hud__actions">
+                <button
+                  type="button"
+                  className="impact-radar-hud__btn"
+                  onClick={() => {
+                    if (mapRef.current && impactHudData) {
+                      mapRef.current.flyTo(impactHudData.epicenter, 7, {
+                        animate: true,
+                        duration: 1.5,
+                      });
+                    }
+                  }}
+                  title="Pusatkan peta ke episenter dan wilayah terdampak"
+                >
+                  🎯 Fokus Wilayah
+                </button>
+                <button
+                  type="button"
+                  className="impact-radar-hud__btn impact-radar-hud__btn--secondary"
+                  onClick={() => setActiveLayer((p) => ({ ...p, tsunamiImpact: !p.tsunamiImpact }))}
+                  title="Toggle tampilan gelombang & lingkaran bahaya"
+                >
+                  {activeLayer.tsunamiImpact ? '👁️ Sembunyikan' : '👁️ Tampilkan'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="impact-radar-hud__collapsed-content">
+              <span className="collapsed-stat">M{impactHudData.magnitude.toFixed(1)} • {impactHudData.mmi} MMI</span>
+              <span className="collapsed-stat collapsed-stat--red">{impactHudData.tsunamiWave}</span>
+              <button
+                type="button"
+                className="collapsed-focus-btn"
+                onClick={() => {
+                  if (mapRef.current && impactHudData) {
+                    mapRef.current.flyTo(impactHudData.epicenter, 7, { animate: true, duration: 1.2 });
+                  }
+                }}
+              >
+                🎯 Fokus
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Floating Tactical Legend Overlay with Toggles (INATEWS · SESAR · EPISENTER) */}
       <div className="map-hud-legend">
         <div className="map-hud-legend__header">
@@ -910,7 +1695,7 @@ export default function Map({
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <span className="map-hud-legend__badge">
-              {Object.values(activeLayer).filter(Boolean).length}/7
+              {Object.values(activeLayer).filter(Boolean).length}/8
             </span>
             <button
               type="button"
@@ -924,6 +1709,7 @@ export default function Map({
                   ash: !allActive,
                   stations: !allActive,
                   buoys: !allActive,
+                  tsunamiImpact: !allActive,
                 });
               }}
               style={{
@@ -1031,7 +1817,7 @@ export default function Map({
               <div className="map-hud-legend__item-left">
                 <span className="legend-dot" style={{ background: '#f97316', color: '#f97316' }}></span>
                 <span style={{ color: activeLayer.ash ? '#fed7aa' : 'var(--text-muted)', fontWeight: activeLayer.ash ? 700 : 500 }}>
-                  💨 Sebaran Abu Vulkanik {isSimulasi ? '(Simulasi)' : ''}
+                  💨 Sebaran Abu Vulkanik (Sesuai Arah Angin) {isSimulasi ? '(Simulasi)' : ''}
                 </span>
               </div>
               <span className="legend-check" style={{ opacity: activeLayer.ash ? 1 : 0 }}>✓</span>
@@ -1065,6 +1851,21 @@ export default function Map({
                 </span>
               </div>
               <span className="legend-check" style={{ opacity: activeLayer.buoys ? 1 : 0 }}>✓</span>
+            </div>
+
+            {/* 8. Tsunami Impact & Infrastruktur (Simulasi / Riil) */}
+            <div
+              className={`map-hud-legend__item ${activeLayer.tsunamiImpact ? 'map-hud-legend__item--active' : 'map-hud-legend__item--inactive'}`}
+              onClick={() => setActiveLayer((p) => ({ ...p, tsunamiImpact: !p.tsunamiImpact }))}
+              title="Klik untuk menyembunyikan/menampilkan Lingkaran Zona Merah Bahaya Tsunami & Kerusakan Infrastruktur"
+            >
+              <div className="map-hud-legend__item-left">
+                <span className="legend-dot" style={{ background: '#ef4444', color: '#ef4444' }}></span>
+                <span style={{ color: activeLayer.tsunamiImpact ? '#fca5a5' : 'var(--text-muted)', fontWeight: activeLayer.tsunamiImpact ? 700 : 500 }}>
+                  ⭕ Lingkaran Zona Merah & Kerusakan Infra {isSimulasi ? '(Simulasi)' : '(Riil BMKG)'}
+                </span>
+              </div>
+              <span className="legend-check" style={{ opacity: activeLayer.tsunamiImpact ? 1 : 0 }}>✓</span>
             </div>
           </div>
         )}

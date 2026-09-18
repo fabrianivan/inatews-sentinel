@@ -3,9 +3,13 @@
 .env*.local
 !.env.example
 
+# Generated connector configs
+connectors/.rendered/
+
 
 # Go binaries & build artifacts
 /backend/server
+/backend/inatews-backend
 *.exe
 *.exe~
 *.dll

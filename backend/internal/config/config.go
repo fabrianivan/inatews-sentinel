@@ -50,6 +50,8 @@ var TopicNames = struct {
 	ActivityIndex    string
 	CorrelatedAlerts string
 	TsunamiScenarios string
+	Incidents        string
+	Response         string
 }{
 	Seismic:          "gempa.seismic",
 	Activity:         "gempa.stations",
@@ -61,6 +63,8 @@ var TopicNames = struct {
 	ActivityIndex:    "gempa.intensity_index",
 	CorrelatedAlerts: "gempa.correlated_alerts",
 	TsunamiScenarios: "gempa.tsunami_scenarios",
+	Incidents:        "gempa.incidents",
+	Response:         "gempa.response",
 }
 
 // AllSourceTopics returns all source topic names
@@ -82,6 +86,8 @@ func AllOutputTopics() []string {
 		TopicNames.ActivityIndex,
 		TopicNames.CorrelatedAlerts,
 		TopicNames.TsunamiScenarios,
+		TopicNames.Incidents,
+		TopicNames.Response,
 	}
 }
 

@@ -1,6 +1,6 @@
 'use client';
 
-export type WorkspaceTab = 'overview' | 'ai' | 'ocean' | 'stream' | 'volcano' | 'all';
+export type WorkspaceTab = 'cockpit' | 'overview' | 'ai' | 'ocean' | 'stream' | 'volcano' | 'all' | 'connectors';
 
 interface WorkspaceNavProps {
   activeTab: WorkspaceTab;
@@ -16,6 +16,13 @@ export default function WorkspaceNav({
   isDrill = false,
 }: WorkspaceNavProps) {
   const tabs: { id: WorkspaceTab; label: string; icon: string; badge?: string; badgeColor?: string }[] = [
+    {
+      id: 'cockpit',
+      label: 'INCIDENT COCKPIT',
+      icon: '🌋',
+      badge: 'REAL-TIME CASCADE',
+      badgeColor: '#ff2a5f',
+    },
     {
       id: 'overview',
       label: 'PETA & SITUASI',
@@ -50,6 +57,13 @@ export default function WorkspaceNav({
       icon: '🌋',
       badge: 'LIVE',
       badgeColor: '#f59e0b',
+    },
+    {
+      id: 'connectors',
+      label: 'CONFLUENT CONNECTORS',
+      icon: '🔌',
+      badge: 'DISABLED',
+      badgeColor: '#64748b',
     },
     {
       id: 'all',
@@ -94,8 +108,8 @@ export default function WorkspaceNav({
 
         {isDrill && (
           <div className="workspace-nav__drill-indicator">
-            <span className="live-dot-pulse" style={{ background: '#f59e0b', boxShadow: '0 0 8px #f59e0b' }} />
-            <span>MODE LATIHAN MEGATHRUST AKTIF</span>
+            <span className="live-dot-pulse" />
+            <span>⚠️ MODE SIMULASI</span>
           </div>
         )}
       </div>

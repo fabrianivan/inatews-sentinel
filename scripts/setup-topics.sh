@@ -20,11 +20,13 @@ TOPICS=(
     "gempa.population"
 )
 
-# Flink output topics (3)
+# Flink output topics (5)
 OUTPUT_TOPICS=(
     "gempa.intensity_index"
     "gempa.correlated_alerts"
     "gempa.tsunami_scenarios"
+    "gempa.incidents"
+    "gempa.response"
 )
 
 echo ""

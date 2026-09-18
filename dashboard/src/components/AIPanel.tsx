@@ -361,7 +361,7 @@ export default function AIPanel({ analysis }: AIPanelProps) {
             borderLeft: `4px solid ${analysis.status === 'CRITICAL' ? '#ff2a5f' : analysis.status === 'HIGH' ? '#ff9100' : '#00f2ff'}`,
             padding: '10px 14px',
             borderRadius: '4px',
-            marginBottom: '14px',
+            marginBottom: '10px',
             fontSize: '13px',
             fontWeight: 600,
             color: '#f8fafc',
@@ -369,6 +369,25 @@ export default function AIPanel({ analysis }: AIPanelProps) {
           }}>
             <span style={{ color: '#00f2ff', marginRight: '6px' }}>EXECUTIVE ASSESSMENT:</span>
             {analysis.threat_summary}
+          </div>
+        )}
+
+        {/* Full AI Assessment Detail (Google Gemini AI / AWS Bedrock) */}
+        {analysis.assessment && (
+          <div style={{
+            background: 'rgba(192, 132, 252, 0.08)',
+            border: '1px solid rgba(192, 132, 252, 0.3)',
+            borderRadius: '6px',
+            padding: '10px 14px',
+            marginBottom: '14px',
+            fontSize: '12px',
+            color: '#f1f5f9',
+            lineHeight: 1.55,
+          }}>
+            <strong style={{ color: '#c084fc', display: 'block', marginBottom: '4px' }}>
+              ⚡ Detail Intelijen AI Lengkap ({activeModel}):
+            </strong>
+            {analysis.assessment}
           </div>
         )}
 

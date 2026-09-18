@@ -10,7 +10,9 @@ import (
 	"gempa-sentinel/internal/agent"
 	"gempa-sentinel/internal/ai"
 	"gempa-sentinel/internal/api"
+	"gempa-sentinel/internal/cascading"
 	"gempa-sentinel/internal/config"
+	"gempa-sentinel/internal/connectors"
 	"gempa-sentinel/internal/hub"
 	"gempa-sentinel/internal/kafka"
 	"gempa-sentinel/internal/models"
@@ -69,22 +71,32 @@ func main() {
 	// Initialize Autonomous Streaming Data Agent
 	streamingAgent := agent.NewStreamingDataAgent(pm, sseHub)
 
-	// Initialize Simulator (for on-demand drill/scenarios)
-	sim := simulator.NewSimulator(producer, sseHub)
+	// Initialize Simulator (for on-demand drill/scenarios with dummy data, completely isolated from Confluent Cloud)
+	sim := simulator.NewSimulator(nil, sseHub)
 
 	// Initialize Real-Time Ingestor (BMKG + USGS + IOC Sea Level + Open-Meteo)
 	ingestor := realtime.NewIngestor(producer, sseHub)
 
-	// Initialize API Server
-	server := api.NewServer(sseHub, sim, pm, streamingAgent, cfg.ServerPort, cfg.CORSOrigin)
-	server.SetIngestor(ingestor)
+	// Initialize Cascading Impact & Confidence Engine
+	cascadingEngine := cascading.NewEngine(producer, sseHub)
 
-	// Wire AI analysis trigger from real-time and simulator to server analyzer and streaming agent
+	// Initialize Disaster Incident Replay Manager
+	replayManager := simulator.NewReplayManager(producer, sseHub, cascadingEngine)
+
+	// Initialize API Server
+	server := api.NewServer(sseHub, sim, pm, streamingAgent, nil, cfg.ServerPort, cfg.CORSOrigin)
+	server.SetIngestor(ingestor)
+	server.SetCascadingEngine(cascadingEngine)
+	server.SetReplayManager(replayManager)
+
+	// Wire AI analysis trigger from real-time and simulator to server analyzer, streaming agent, and cascading engine
 	sim.SetAnalysisTrigger(func(idx models.ActivityIndex) {
+		cascadingEngine.OnActivityIndex(idx)
 		streamingAgent.OnActivityIndex(idx)
 		server.TriggerAIAnalysis(idx)
 	})
 	ingestor.SetAnalysisTrigger(func(idx models.ActivityIndex) {
+		cascadingEngine.OnActivityIndex(idx)
 		streamingAgent.OnActivityIndex(idx)
 		server.TriggerAIAnalysis(idx)
 	})
@@ -93,6 +105,7 @@ func main() {
 	consumer, err := kafka.NewConsumer(cfg, kafka.ConsumerCallbacks{
 		OnActivity: func(idx models.ActivityIndex) {
 			sseHub.BroadcastAll("activity_index", idx)
+			cascadingEngine.OnActivityIndex(idx)
 			streamingAgent.OnActivityIndex(idx)
 			// Trigger AI analysis on significant changes
 			if idx.OverallPercentage > 40 {
@@ -105,7 +118,15 @@ func main() {
 		},
 		OnTsunami: func(ts models.TsunamiScenario) {
 			sseHub.BroadcastAll("tsunami", ts)
+			cascadingEngine.OnTsunamiScenario(ts)
 			streamingAgent.OnTsunamiScenario(ts)
+		},
+		OnIncident: func(inc models.IncidentEvent) {
+			sseHub.BroadcastAll("incident_update", inc)
+			cascadingEngine.SetIncident(inc)
+		},
+		OnResponse: func(resp models.IncidentResponseEvent) {
+			sseHub.BroadcastAll("incident_response", resp)
 		},
 	})
 	if err != nil {
@@ -115,6 +136,14 @@ func main() {
 	// Create a context that cancels on interrupt
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Initialize Connector Manager
+	clusterID := "lkc-xqxxgr1"
+	connectorMgr := connectors.NewManager(clusterID)
+	go connectorMgr.Start(ctx)
+
+	// Set connector manager on server
+	server.SetConnectorManager(connectorMgr)
 
 	// Start the autonomous streaming data agent
 	streamingAgent.Start(ctx)

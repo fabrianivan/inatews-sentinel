@@ -8,42 +8,73 @@ A streaming intelligence system that continuously monitors BMKG seismic networks
 
 > ⚠️ **Important**: This system provides real-time seismic decision-support and rapid impact estimation. It is **NOT** an earthquake prediction system.
 
-**Live dashboard:** https://dashboard-six-psi-45.vercel.app (disabled)
+**Live dashboard:** [https://inatews-sentinel.vercel.app](https://inatews-sentinel.vercel.app)
 
-<img width="1505" height="853" alt="Screenshot 2026-09-09 at 15 40 09" src="https://github.com/user-attachments/assets/f694cf7f-0baf-44bc-b64f-d30f9a5b8709" />
+<img width="1512" height="867" alt="Screenshot 2026-09-11 at 15 30 26" src="https://github.com/user-attachments/assets/f7fa35e1-8cfb-4468-8e17-b9e1203322c5" />
+
+<img width="1501" height="862" alt="Screenshot 2026-09-11 at 14 56 23" src="https://github.com/user-attachments/assets/b3ed1b8e-b293-40d2-9fbd-4fae8d273cac" />
+
+<img width="1497" height="864" alt="Screenshot 2026-09-11 at 14 56 20" src="https://github.com/user-attachments/assets/49f9eb77-085f-4c0b-adcb-745887f86dc5" />
+
+<img width="1512" height="867" alt="Screenshot 2026-09-11 at 15 40 52" src="https://github.com/user-attachments/assets/9cf6a146-0d92-4e11-83d9-f582386eb726" />
+
 
 ---
 
-## Architecture
+## The Upgraded Paradigm: Earthquake → Impact → Cascade → Response
+
+> *"We don't just detect earthquakes. We correlate thousands of events in motion to understand how a disaster is evolving, then turn those signals into actionable intelligence."*
+
+Instead of an alert monitor that simply notifies after an event, **INATEWS Sentinel** models disaster dynamics as a chain of real-time cascading consequences continuously correlated by **Confluent Cloud** and **Apache Flink SQL**:
 
 ```
-                 DATA SOURCES
-                      │
-      ┌───────────────┼────────────────┐
-      ↓               ↓                ↓
-   Seismic         Satellite         Ocean
- (BMKG/USGS)     (InSAR Slip)      (InaTEWS)
-   Stations      Infrastructure     Weather
-      ↓               ↓                ↓
-      └────────── CONFLUENT ───────────┘
-                       │
-                  Kafka Topics (7 gempa.*)
-                       │
-                    FLINK SQL
-                       │
-              Real-time correlation
-              Window aggregation
-              P/S Wave & Tsunami detection
-                       │
-                  Output Topics (3)
-                       │
-              ┌────────┴─────────┐
-              ↓                  ↓
-        Go Backend            Gemini AI
-              ↓                  ↓
-         SSE Stream         Analysis
-              ↓                  ↓
-         Dashboard       Decision-Support
+                    DATA SOURCES
+                         │
+       ┌─────────────────┼──────────────────┐
+       │                 │                  │
+   SEISMIC            OCEAN             SATELLITE
+ (BMKG/USGS)       (InaTEWS Buoy)      (InSAR Slip)
+   STATIONS        INFRASTRUCTURE      POPULATION
+       │                 │                  │
+       ▼                 ▼                  ▼
+                 ┌───────▼────────┐
+                 │  CONFLUENT     │
+                 │  CLOUD KAFKA   │
+                 └───────┬────────┘
+                         │
+              ┌──────────▼──────────┐
+              │     APACHE FLINK    │
+              │                     │
+              │ Event Correlation   │
+              │ Window Aggregation  │
+              │ State Management    │
+              │ Hazard Detection    │
+              └──────────┬──────────┘
+                         │
+          ┌──────────────┼───────────────┐
+          ▼              ▼               ▼
+   intensity_index   correlated      tsunami
+                     alerts          scenarios
+          │              │               │
+          └──────────────┼───────────────┘
+                         ▼
+                 gempa.incidents (Evolving Incident State)
+                         │
+                         ▼
+              CASCADING IMPACT ENGINE
+              & CONFIDENCE SCORING MODEL
+                         │
+                         ▼
+                  gempa.response (Tactical Directives)
+                         │
+                ┌────────┴────────┐
+                ▼                 ▼
+             GEMINI          DASHBOARD
+              AGENT              │
+                │                │
+                └───────┬────────┘
+                        ▼
+                 INCIDENT COCKPIT
 ```
 
 ## Tech Stack
@@ -51,82 +82,71 @@ A streaming intelligence system that continuously monitors BMKG seismic networks
 | Layer | Technology |
 |-------|-----------|
 | Backend | Go 1.23 + Gin + confluent-kafka-go v2 |
-| Stream Processing | Confluent Cloud Apache Flink SQL |
-| AI | Google Gemini 2.5 Flash |
-| Frontend | Next.js 16 + Leaflet.js (Tactical Cockpit UI) |
-| Messaging | Confluent Cloud (Apache Kafka) |
+| Stream Processing | Confluent Cloud Apache Flink SQL (CEP & Window Aggregation) |
+| AI Decision Support | Google Gemini 2.5 Flash & AWS Bedrock (Claude 3.5 Sonnet) |
+| Frontend | Next.js 16 + Leaflet.js + Tailwind-free Vanilla Tactical CSS |
+| Messaging | Confluent Cloud (Apache Kafka with Schema Registry) |
 
-## Autonomous Megathrust Scenarios
+## Core Innovations
 
-The simulator cycles automatically through 4 high-risk Indonesian megathrust scenarios without requiring manual intervention:
-
-1. **Megathrust Selat Sunda (M8.2)** — Sunda Strait subduction segment, triggering 5–12m tsunami runup toward Anyer, Pandeglang, and Lampung.
-2. **Megathrust Selatan Jawa (M8.8)** — Java Trench subduction offshore Cilacap to Pacitan, generating 8–20m tsunami waves along the southern Java corridor.
-3. **Megathrust Mentawai-Siberut (M9.0)** — Sunda Megathrust offshore Padang and Mentawai Islands, generating 10–25m catastrophic tsunami waves.
-4. **Megathrust Sulawesi-Palu (M7.5)** — Palu-Koro strike-slip rupture replay with severe liquefaction and localized submarine landslide tsunami in Palu Bay.
-
-## Setup & Quickstart
-
-### 1. Environment Variables
-
-```bash
-cp .env.example .env
-# Edit .env with your credentials (or DEMO_MODE=true for standalone mode)
+### 1. Single Evolving Disaster State (`gempa.incidents`)
+Rather than disconnected alert pings, the platform aggregates all incoming telemetry into a single, continuously updated incident event:
+```json
+{
+  "incident_id": "INC-20260915-001",
+  "hazard": "EARTHQUAKE_TSUNAMI_CASCADE",
+  "magnitude": 7.8,
+  "region": "South Java Trench",
+  "risk_score": 86,
+  "seismic_intensity": "VII",
+  "tsunami_risk": "HIGH",
+  "population_exposed": 1842000,
+  "critical_infrastructure": 37,
+  "road_disruptions": 12,
+  "confidence": 0.95,
+  "confidence_score": 95,
+  "status": "ESCALATING"
+}
 ```
 
-### 2. Create Kafka Topics
+### 2. Multi-Stream Confidence Model (0–100 Score)
+Not all sensor feeds are equally definitive. Confidence accumulates dynamically as evidence arrives:
+- **Broadband Seismic Stations**: `+35` (P/S waves, PGA > 0.15g)
+- **USGS / BMKG Agreement**: `+20` (Cross-agency validation)
+- **Satellite InSAR Slip**: `+15` (Coseismic seabed fault displacement)
+- **InaTEWS DART Buoy**: `+20` (Sea level wave anomaly confirmed)
+- **Infrastructure Signal**: `+10` (Bridges, hospitals, power substations reporting strain)
 
-```bash
-chmod +x scripts/setup-topics.sh
-./scripts/setup-topics.sh
-```
+### 3. Event-Time Window Progression
+Disaster consequences unfold over distinct physical time windows:
+- **10s**: Sensor confirmation (Broadband network)
+- **30s**: Seismic intensity (MMI calculated)
+- **2m**: Tsunami wave front correlation (DART buoy)
+- **5m**: Infrastructure disruptions (Bridge & port halts)
+- **10m**: Evacuation priorities (Coastal population buffer)
 
-### 3. Start Backend
-
-```bash
-cd backend
-go run cmd/server/main.go
-```
-
-### 4. Start Dashboard
-
-```bash
-cd dashboard
-npm run dev
-```
-
-### 5. Deploy Flink SQL
-
-Deploy all 8 views and 3 real-time stream processing pipelines automatically to Confluent Cloud:
-
-```bash
-chmod +x scripts/deploy-flink.sh
-./scripts/deploy-flink.sh
-# or: npm run deploy:flink
-```
-
-Or run the SQL statements in order in Confluent Cloud Flink SQL Query Studio:
-1. `flink/01_create_tables.sql` — Source & unified telemetry views (`gempa.*` -> `telemetry_events`)
-2. `flink/02_activity_index.sql` — Real-time National Seismic Intensity Index
-3. `flink/03_correlated_alerts.sql` — Multi-stream hazard correlation alerts
-4. `flink/04_tsunami_detection.sql` — Tsunami wave anomaly detection
+### 4. Interactive Disaster Replay (`▶ REPLAY DISASTER`)
+Audiences watch the **Confluent Stream Lineage** update while the dashboard simultaneously evolves in motion:
+`gempa.seismic → gempa.stations → gempa.intensity_index → gempa.satellite → gempa.tsunami → gempa.population → gempa.infrastructure → gempa.incidents → gempa.response`
 
 ---
 
 ## Key Kafka Topics
 
-| Topic | Description | Source |
+| Topic | Description | Source / Role |
 |---|---|---|
-| `gempa.seismic` | Real-time earthquake events (USGS & BMKG) | Ingestion |
-| `gempa.stations` | BMKG broadband seismic station telemetry (P/S waves, PGA) | Network |
+| `gempa.seismic` | Real-time earthquake events (USGS & BMKG) | Ingestion Feed |
+| `gempa.stations` | BMKG broadband seismic station telemetry (PGA, P/S waves) | Network Telemetry |
 | `gempa.tsunami` | InaTEWS DART buoy and tide gauge telemetry | Ocean Sensors |
 | `gempa.weather` | Real-time meteorology & barometric pressure | Open-Meteo |
-| `gempa.satellite` | InSAR surface displacement and coseismic slip | Geodetic Ops |
-| `gempa.infrastructure` | Hospital, bridge, port, and power grid status | Infrastructure |
+| `gempa.satellite` | InSAR surface displacement and coseismic slip | Geodetic Operations |
+| `gempa.infrastructure` | Hospital, bridge, port, and power grid status | Infrastructure Monitoring |
 | `gempa.population` | Evacuation routes, shelters, and readiness | Civil Defense |
-| `gempa.intensity_index` | Computed real-time seismic intensity & MMI | Flink SQL |
-| `gempa.correlated_alerts` | Multi-stream correlated hazard warnings | Flink SQL |
+| `gempa.intensity_index` | Computed real-time seismic intensity & MMI | Flink SQL Star Query |
+| `gempa.correlated_alerts` | Multi-stream correlated hazard warnings | Flink SQL CEP |
 | `gempa.tsunami_scenarios` | Detected tsunami wave propagation alerts | Flink SQL |
+| `gempa.incidents` | **Single evolving disaster state** | **Flink SQL & Cascading Engine** |
+| `gempa.response` | **Tactical AI & operational response directives** | **Flink SQL & Gemini AI** |
 
 ---
 
@@ -143,3 +163,20 @@ The streaming agent operates an event-driven OODA (Observe-Orient-Decide-Act) re
 - **Continuous Sliding-Window Memory**: Evaluates seismic swarms, tremor spikes, tsunami buoy anomalies, and infrastructure strain.
 - **Multi-Agency Directive Dispatch**: Dispatches automated tactical directives for BMKG (tsunami sirens), BNPB (evacuation corridors), KEMENHUB (bridge & maritime transit suspension), and BASARNAS (search & rescue deployment).
 - **Token-by-Token Live Streaming Chat**: `/api/agent/chat/stream` streams AI response tokens in real-time over SSE directly into the dashboard.
+
+---
+
+## License & Copyright
+
+This project is licensed under the [MIT License](LICENSE).
+
+Copyright (c) 2026 Fabrian Ivan Prasetya. All rights reserved.
+
+### Open Source & Public APIs
+This application utilizes public data and Open Source / Open Data APIs provided by:
+- **BMKG (InaTEWS)** — National Earthquake & Tsunami Data Feeds
+- **USGS** — Earthquake Hazards Program Real-time GeoJSON API
+- **IOC / UNESCO** — Sea Level Station Monitoring Facility (Tide Gauges)
+- **MAGMA Indonesia / PVMBG** — Real-time Volcanic Activity Reports
+- **Open-Meteo** — Real-time Meteorology & Weather API
+

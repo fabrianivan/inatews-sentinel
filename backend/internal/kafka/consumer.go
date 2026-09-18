@@ -15,11 +15,13 @@ import (
 
 // Consumer wraps the Confluent Kafka consumer for Flink output topics
 type Consumer struct {
-	consumer    *ckafka.Consumer
-	cfg         *config.Config
-	onActivity  func(models.ActivityIndex)
-	onAlert     func(models.CorrelatedAlert)
-	onTsunami   func(models.TsunamiScenario)
+	consumer   *ckafka.Consumer
+	cfg        *config.Config
+	onActivity func(models.ActivityIndex)
+	onAlert    func(models.CorrelatedAlert)
+	onTsunami  func(models.TsunamiScenario)
+	onIncident func(models.IncidentEvent)
+	onResponse func(models.IncidentResponseEvent)
 }
 
 // ConsumerCallbacks holds callback functions for consumed messages
@@ -27,6 +29,8 @@ type ConsumerCallbacks struct {
 	OnActivity func(models.ActivityIndex)
 	OnAlert    func(models.CorrelatedAlert)
 	OnTsunami  func(models.TsunamiScenario)
+	OnIncident func(models.IncidentEvent)
+	OnResponse func(models.IncidentResponseEvent)
 }
 
 // NewConsumer creates a new Kafka consumer for Flink output topics
@@ -63,6 +67,8 @@ func NewConsumer(cfg *config.Config, callbacks ConsumerCallbacks) (*Consumer, er
 		onActivity: callbacks.OnActivity,
 		onAlert:    callbacks.OnAlert,
 		onTsunami:  callbacks.OnTsunami,
+		onIncident: callbacks.OnIncident,
+		onResponse: callbacks.OnResponse,
 	}, nil
 }
 
@@ -124,6 +130,26 @@ func (c *Consumer) processMessage(msg *ckafka.Message) {
 		}
 		if c.onTsunami != nil {
 			c.onTsunami(ts)
+		}
+
+	case config.TopicNames.Incidents:
+		var inc models.IncidentEvent
+		if err := json.Unmarshal(msg.Value, &inc); err != nil {
+			log.Printf("[ERROR] Failed to unmarshal incident event: %v", err)
+			return
+		}
+		if c.onIncident != nil {
+			c.onIncident(inc)
+		}
+
+	case config.TopicNames.Response:
+		var resp models.IncidentResponseEvent
+		if err := json.Unmarshal(msg.Value, &resp); err != nil {
+			log.Printf("[ERROR] Failed to unmarshal response event: %v", err)
+			return
+		}
+		if c.onResponse != nil {
+			c.onResponse(resp)
 		}
 	}
 }

@@ -106,14 +106,33 @@ export default function StatusBar({
             }`}
             onClick={() => onModeChange('SIMULASI')}
           >
-            🧪 DRILL SIMULASI
+            SIMULASI
           </button>
         </div>
 
         {/* Confluent Cloud Status Badge */}
-        <div className="status-bar__cluster-badge">
-          <span>☁️</span>
-          <span>Confluent Cloud (us-east-2)</span>
+        <div
+          className="status-bar__cluster-badge"
+          style={
+            dashboardMode === 'SIMULASI'
+              ? {
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  borderColor: 'rgba(239, 68, 68, 0.5)',
+                  color: '#f87171',
+                }
+              : {
+                  background: 'rgba(100, 116, 139, 0.15)',
+                  borderColor: 'rgba(100, 116, 139, 0.35)',
+                  color: '#94a3b8',
+                }
+          }
+        >
+          <span>{dashboardMode === 'SIMULASI' ? '⚠️' : '⏸️'}</span>
+          <span>
+            {dashboardMode === 'SIMULASI'
+              ? 'SIMULASI (DUMMY DRILL)'
+              : 'Confluent Cloud — Disabled'}
+          </span>
         </div>
       </div>
     </header>

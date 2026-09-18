@@ -60,7 +60,7 @@ export default function SidebarNav({
       id: 'governance',
       label: 'Confluent Governance',
       icon: '🛡️',
-      badge: '10 TOPICS',
+      badge: 'DISABLED',
       badgeType: 'neutral',
       desc: 'Schema Registry, klasifikasi data',
     },
@@ -101,13 +101,13 @@ export default function SidebarNav({
       <div className="dash-sidebar__footer">
         <div className="dash-sidebar__status-box">
           <div className="dash-sidebar__status-row">
-            <span className="dash-sidebar__status-dot live-dot-pulse"></span>
-            <span className="dash-sidebar__status-title">Confluent Cloud Fabric</span>
+            <span className="dash-sidebar__status-dot" style={{ background: '#475569', boxShadow: '0 0 6px rgba(71, 85, 105, 0.5)' }}></span>
+            <span className="dash-sidebar__status-title" style={{ color: '#64748b' }}>Confluent Cloud — Disabled</span>
           </div>
           <div className="dash-sidebar__status-meta">
-            <span>Cluster: pkc-921jm (aws/us-east-2)</span>
-            <span>Schema Registry: Confluent Cloud SR</span>
-            <span>Flink Compute Pool: cpool-gempa-prod</span>
+            <span style={{ color: '#475569' }}>Cluster: pkc-921jm (aws/us-east-2) — OFFLINE</span>
+            <span style={{ color: '#475569' }}>Schema Registry: Tidak Aktif</span>
+            <span style={{ color: '#475569' }}>Flink Compute Pool: Disabled</span>
           </div>
         </div>
 

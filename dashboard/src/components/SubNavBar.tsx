@@ -71,8 +71,8 @@ export default function SubNavBar({
             title="Beralih ke Skenario Simulasi Megathrust, Flink Engine, dan Schema Governance"
           >
             <span className="dash-subbar__mode-icon">🧪</span>
-            <span className="dash-subbar__mode-title">SIMULASI KRISIS</span>
-            <span className="dash-subbar__mode-tag">FLINK & DRILL</span>
+            <span className="dash-subbar__mode-title">SKENARIO SIMULASI</span>
+            <span className="dash-subbar__mode-tag">SIMULASI</span>
           </button>
         </div>
 

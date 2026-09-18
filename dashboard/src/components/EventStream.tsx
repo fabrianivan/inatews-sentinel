@@ -37,12 +37,41 @@ function severityClass(severity: string): string {
   }
 }
 
+function severityItemClass(severity: string): string {
+  switch (severity.toUpperCase()) {
+    case 'CRITICAL': return 'event-stream__item--critical';
+    case 'HIGH': return 'event-stream__item--high';
+    case 'MEDIUM': return 'event-stream__item--medium';
+    default: return '';
+  }
+}
+
 export default function EventStream({ events }: EventStreamProps) {
   const [isMounted, setIsMounted] = useState(false);
+  const [filter, setFilter] = useState('ALL');
+  const [paused, setPaused] = useState(false);
+  const [visibleEvents, setVisibleEvents] = useState(events);
 
   useEffect(() => {
     setIsMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (!paused) setVisibleEvents(events);
+  }, [events, paused]);
+
+  const filteredEvents = visibleEvents.filter((event) => {
+    if (filter === 'CRITICAL') return event.severity === 'CRITICAL' || event.severity === 'HIGH';
+    if (filter === 'SEISMIC') return event.type.toUpperCase() === 'SEISMIC';
+    if (filter === 'OCEAN') return event.type.toUpperCase() === 'OCEAN';
+    if (filter === 'WEATHER') return event.type.toUpperCase() === 'WEATHER';
+    return true;
+  });
+
+  const handlePauseToggle = () => {
+    if (paused) setVisibleEvents(events);
+    setPaused((current) => !current);
+  };
 
   return (
     <div className="card event-stream">
@@ -51,18 +80,42 @@ export default function EventStream({ events }: EventStreamProps) {
           <span className="card__title-icon">📜</span>
           Live Event Stream
         </span>
-        <span className="card__badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text-muted)' }}>
-          {events.length} events
-        </span>
+        <div className="event-stream__controls">
+          <label className="event-stream__filter-label" htmlFor="event-filter">Filter</label>
+          <select
+            id="event-filter"
+            className="event-stream__filter"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            aria-label="Filter live events"
+          >
+            <option value="ALL">Semua</option>
+            <option value="CRITICAL">Prioritas</option>
+            <option value="SEISMIC">Seismik</option>
+            <option value="OCEAN">Laut</option>
+            <option value="WEATHER">Cuaca</option>
+          </select>
+          <button
+            type="button"
+            className={`event-stream__pause ${paused ? 'event-stream__pause--active' : ''}`}
+            onClick={handlePauseToggle}
+            aria-pressed={paused}
+          >
+            {paused ? '▶ Lanjut' : 'Ⅱ Jeda'}
+          </button>
+          <span className="card__badge" style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text-muted)' }}>
+            {filteredEvents.length}/{events.length}
+          </span>
+        </div>
       </div>
       <div className="event-stream__list">
-        {events.length === 0 ? (
+        {filteredEvents.length === 0 ? (
           <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-            Waiting for events...
+            {events.length === 0 ? 'Menunggu event masuk...' : 'Tidak ada event untuk filter ini.'}
           </div>
         ) : (
-          events.map((event) => (
-            <div key={event.id} className="event-stream__item">
+          filteredEvents.map((event) => (
+            <div key={event.id} className={`event-stream__item ${severityItemClass(event.severity)}`}>
               <div className={`event-stream__severity ${severityClass(event.severity)}`} />
               <span className="event-stream__time" suppressHydrationWarning>
                 {isMounted ? formatTime(event.timestamp) : '--:--:--'}

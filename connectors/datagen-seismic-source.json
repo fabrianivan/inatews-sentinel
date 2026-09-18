@@ -1,0 +1,15 @@
+{
+  "name": "DatagenSource_SeismicTelemetry",
+  "config": {
+    "connector.class": "DatagenSource",
+    "name": "DatagenSource_SeismicTelemetry",
+    "kafka.auth.mode": "KAFKA_API_KEY",
+    "kafka.api.key": "${KAFKA_API_KEY}",
+    "kafka.api.secret": "${KAFKA_API_SECRET}",
+    "kafka.topic": "gempa.stations",
+    "output.data.format": "JSON",
+    "tasks.max": "1",
+    "max.interval": "2000",
+    "schema.string": "{\"type\":\"record\",\"name\":\"StationEvent\",\"namespace\":\"inatews.sentinel\",\"fields\":[{\"name\":\"type\",\"type\":{\"type\":\"enum\",\"name\":\"EventType\",\"symbols\":[\"STATION\",\"SEISMIC\"]}},{\"name\":\"station_id\",\"type\":{\"type\":\"enum\",\"name\":\"StationCode\",\"symbols\":[\"STN_CGK_01\",\"STN_BDG_02\",\"STN_SBY_03\",\"STN_DPS_04\",\"STN_YOG_05\",\"STN_MDN_06\",\"STN_PLW_07\",\"STN_KPG_08\"]}},{\"name\":\"station_name\",\"type\":{\"type\":\"enum\",\"name\":\"StationZone\",\"symbols\":[\"BMKG_Sunda_Strait\",\"BMKG_Java_Trench\",\"BMKG_Bali_Arc\",\"BMKG_Sulawesi_Palu\",\"BMKG_Mentawai\"]}},{\"name\":\"latitude\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":-10.0,\"max\":5.0}}}},{\"name\":\"longitude\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":95.0,\"max\":141.0}}}},{\"name\":\"signal_quality\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":85.0,\"max\":100.0}}}},{\"name\":\"p_wave_arrival\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":1.5,\"max\":12.0}}}},{\"name\":\"s_wave_arrival\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":4.0,\"max\":25.0}}}},{\"name\":\"pga_recorded\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":0.05,\"max\":0.85}}}},{\"name\":\"status\",\"type\":{\"type\":\"enum\",\"name\":\"StationStatus\",\"symbols\":[\"ONLINE\",\"NORMAL\"]}}]}"
+  }
+}

@@ -83,12 +83,22 @@ func (s *Simulator) generateWeatherEvents(ctx context.Context) {
 					Timestamp:           time.Now(),
 				}
 			}
+			event.Anomaly, event.AnomalySeverity = models.ClassifyWeatherAnomaly(event)
+			s.mu.Lock()
+			s.latestWeatherAnomaly = event.Anomaly
+			s.mu.Unlock()
 
 			_ = s.producer.Produce(config.TopicNames.Weather, "station-krakatau", event)
+			severity := "LOW"
+			description := fmt.Sprintf("Real-time Wind %.0fkm/h %s, pressure %.0fhPa, temp %.1f°C", event.WindSpeed, event.WindDirection, event.AtmosphericPressure, event.Temperature)
+			if event.Anomaly != "" {
+				severity = event.AnomalySeverity
+				description = fmt.Sprintf("[%s] Wind %.0fkm/h %s, pressure %.0fhPa. Verifikasi radar BMKG diperlukan.", event.Anomaly, event.WindSpeed, event.WindDirection, event.AtmosphericPressure)
+			}
 			s.hub.BroadcastAll("event", map[string]interface{}{
 				"type":        "WEATHER",
-				"description": fmt.Sprintf("Real-time Wind %.0fkm/h %s, pressure %.0fhPa, temp %.1f°C", event.WindSpeed, event.WindDirection, event.AtmosphericPressure, event.Temperature),
-				"severity":    "LOW",
+				"description": description,
+				"severity":    severity,
 				"timestamp":   event.Timestamp,
 				"data":        event,
 			})

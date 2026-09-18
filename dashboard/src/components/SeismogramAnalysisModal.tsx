@@ -20,6 +20,7 @@ export default function SeismogramAnalysisModal({
   const [showPhases, setShowPhases] = useState<boolean>(true);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [filterContrast, setFilterContrast] = useState<'normal' | 'high-contrast' | 'invert'>('normal');
+  const [viewMode, setViewMode] = useState<'drum' | 'photo' | 'spectrogram'>('drum');
   const [imageError, setImageError] = useState<boolean>(false);
   const imageContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -39,6 +40,11 @@ export default function SeismogramAnalysisModal({
 
   if (!volcano) return null;
 
+  const isBMKG =
+    volcano.volcano_name.toLowerCase().includes('bmkg') ||
+    volcano.alert_level.toLowerCase().includes('bmkg') ||
+    volcano.id.toLowerCase().includes('bmkg');
+
   const geo = findVolcanoLocation(volcano.volcano_name);
   const ash = getVolcanicAshTrajectory(volcano.volcano_name);
   const isAwas = volcano.alert_level.includes('AWAS');
@@ -51,18 +57,20 @@ export default function SeismogramAnalysisModal({
   // Derive seismological estimates
   const estPGA = (ampNum * 0.0032).toFixed(3);
   const estRSAM = Math.round(ampNum * 115 + durNum * 12);
-  const freqDominant = ampNum > 40 ? '1.4 - 2.2 Hz' : '2.0 - 3.5 Hz';
-  const signalType =
-    ampNum >= 40
-      ? 'Gempa Letusan / Erupsi Kuat (High Energy Explosive Tremor)'
-      : ampNum >= 20
-      ? 'Gempa Letusan / Erupsi Sedang (Explosion Tremor)'
-      : 'Gempa Hembusan / Vulkanik Dangkal (VB)';
+  const freqDominant = isBMKG ? '0.02 - 5.0 Hz (Broadband)' : ampNum > 40 ? '1.4 - 2.2 Hz' : '2.0 - 3.5 Hz';
+  const signalType = isBMKG
+    ? 'Gempa Tektonik Regional / Subduksi Megathrust (Broadband P & S Wave)'
+    : ampNum >= 40
+    ? 'Gempa Letusan / Erupsi Kuat (High Energy Explosive Tremor)'
+    : ampNum >= 20
+    ? 'Gempa Letusan / Erupsi Sedang (Explosion Tremor)'
+    : 'Gempa Hembusan / Vulkanik Dangkal (VB)';
 
-  const interpretation =
-    ampNum >= 40
-      ? `Defleksi seismometer sebesar ${volcano.amplitude} dengan durasi ${volcano.duration} mengindikasikan dekompresi gas magmatik eksplosif bertekanan tinggi di conduit kawah G. ${volcano.volcano_name}. Gelombang seismik didominasi komponen P-wave tajam disusul tremor permukaan berspektrum rendah (${freqDominant}). Akumulasi energi mekanik fluida tergolong signifikan, mengindikasikan pelepasan kolom abu vulkanik ke troposfer dan potensi lontaran batu pijar.`
-      : `Sinyal seismograf menunjukkan pelepasan tekanan gas vulkanik dengan amplitudo ${volcano.amplitude} dan durasi ${volcano.duration}. Pola gelombang merefleksikan getaran fluida hidrotermal di kedalaman dangkal (<1.5 km). Tidak terdeteksi sinyal deformasi regional atau pergeseran sesar tektonik yang mengarah pada keruntuhan tubuh gunung.`;
+  const interpretation = isBMKG
+    ? `Citra rekaman seismograf broadband BMKG merefleksikan propagasi gelombang primer (P-wave) berkecepatan tinggi diikuti gelombang geser sekunder (S-wave) beramplitudo kuat. Spektrum frekuensi broadband (0.02-5 Hz) merekam getaran elastis kerak bumi akibat pelepasan dislokasi sesar tektonik atau subduksi lempeng. Sinyal dikorelasikan dengan Shakemap intensitas MMI nasional untuk pemetaan akselerasi percepatan tanah.`
+    : ampNum >= 40
+    ? `Defleksi seismometer sebesar ${volcano.amplitude} dengan durasi ${volcano.duration} mengindikasikan dekompresi gas magmatik eksplosif bertekanan tinggi di conduit kawah G. ${volcano.volcano_name}. Gelombang seismik didominasi komponen P-wave tajam disusul tremor permukaan berspektrum rendah (${freqDominant}). Akumulasi energi mekanik fluida tergolong signifikan, mengindikasikan pelepasan kolom abu vulkanik ke troposfer dan potensi lontaran batu pijar.`
+    : `Sinyal seismograf menunjukkan pelepasan tekanan gas vulkanik dengan amplitudo ${volcano.amplitude} dan durasi ${volcano.duration}. Pola gelombang merefleksikan getaran fluida hidrotermal di kedalaman dangkal (<1.5 km). Tidak terdeteksi sinyal deformasi regional atau pergeseran sesar tektonik yang mengarah pada keruntuhan tubuh gunung.`;
 
   // Pan & Drag Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -140,15 +148,19 @@ export default function SeismogramAnalysisModal({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span style={{ fontSize: '24px' }}>🌋</span>
+            <span style={{ fontSize: '24px' }}>{isBMKG ? '📡' : '🌋'}</span>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                 <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
-                  Analisis Informasi Citra Seismogram: G. {volcano.volcano_name}
+                  {isBMKG
+                    ? `Analisis Citra Seismograf Broadband & Shakemap BMKG: ${volcano.volcano_name}`
+                    : `Analisis Citra Seismograf & Drum Rekorder PVMBG: G. ${volcano.volcano_name}`}
                 </h3>
                 <span
                   className={`volcano-card__level-badge ${
-                    isAwas
+                    isBMKG
+                      ? 'volcano-card__level-badge--waspada'
+                      : isAwas
                       ? 'volcano-card__level-badge--awas'
                       : isSiaga
                       ? 'volcano-card__level-badge--siaga'
@@ -158,12 +170,20 @@ export default function SeismogramAnalysisModal({
                 >
                   {volcano.alert_level}
                 </span>
-                <span style={{ background: 'rgba(0, 242, 255, 0.15)', color: '#00f2ff', border: '1px solid rgba(0, 242, 255, 0.3)', borderRadius: '4px', fontSize: '10px', padding: '1px 6px', fontWeight: 700 }}>
-                  PVMBG MAGMA OFFICIAL
+                <span style={{
+                  background: isBMKG ? 'rgba(59, 130, 246, 0.2)' : 'rgba(0, 242, 255, 0.15)',
+                  color: isBMKG ? '#60a5fa' : '#00f2ff',
+                  border: `1px solid ${isBMKG ? 'rgba(59, 130, 246, 0.4)' : 'rgba(0, 242, 255, 0.3)'}`,
+                  borderRadius: '4px',
+                  fontSize: '10px',
+                  padding: '1px 6px',
+                  fontWeight: 700
+                }}>
+                  {isBMKG ? 'BMKG PUSAT GEMPA NASIONAL' : 'PVMBG MAGMA OFFICIAL'}
                 </span>
               </div>
               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                📍 {geo?.pgaStation || 'Pos Pengamatan Gunung Api PVMBG'} • {geo?.island || 'Indonesia'} • Waktu Rekaman: {volcano.time} ({volcano.date})
+                📍 {isBMKG ? (volcano.description.split('.')[0] || 'Jaringan Seismologi BMKG TEWS') : (geo?.pgaStation || 'Pos Pengamatan Gunung Api PVMBG')} • Waktu Rekaman: {volcano.time} ({volcano.date})
               </span>
             </div>
           </div>
@@ -206,7 +226,101 @@ export default function SeismogramAnalysisModal({
           className="seismogram-modal__body"
         >
           {/* Left Column: Seismogram Image Viewer with Deep Zoom & Pan */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {/* Tab Mode Selector: Seismograf Helicorder vs Foto Kawah vs Spektrogram */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                paddingBottom: '2px',
+                flexWrap: 'wrap',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode('drum');
+                  handleResetZoom();
+                }}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  fontSize: '11px',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  background: viewMode === 'drum' ? 'rgba(0, 242, 255, 0.22)' : 'rgba(255, 255, 255, 0.05)',
+                  border: `1px solid ${viewMode === 'drum' ? '#00f2ff' : 'var(--border-subtle)'}`,
+                  color: viewMode === 'drum' ? '#00f2ff' : 'var(--text-secondary)',
+                  boxShadow: viewMode === 'drum' ? '0 0 10px rgba(0, 242, 255, 0.25)' : 'none',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {isBMKG ? '📈 Rekaman Seismograf BMKG (Helicorder Drum)' : '📈 Rekaman Seismograf (Helicorder Drum)'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode('photo');
+                  handleResetZoom();
+                }}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  fontSize: '11px',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  background: viewMode === 'photo' ? 'rgba(249, 115, 22, 0.22)' : 'rgba(255, 255, 255, 0.05)',
+                  border: `1px solid ${viewMode === 'photo' ? '#f97316' : 'var(--border-subtle)'}`,
+                  color: viewMode === 'photo' ? '#fb923c' : 'var(--text-secondary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  boxShadow: viewMode === 'photo' ? '0 0 10px rgba(249, 115, 22, 0.25)' : 'none',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <span>{isBMKG ? '🗺️ Citra Shakemap BMKG Resmi' : '🌋 Foto Citra Erupsi (MAGMA)'}</span>
+                {volcano.image_url && (
+                  <span
+                    style={{
+                      background: '#10b981',
+                      color: '#fff',
+                      fontSize: '9px',
+                      padding: '1px 5px',
+                      borderRadius: '4px',
+                      fontWeight: 800,
+                    }}
+                  >
+                    CITRA RESMI
+                  </span>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode('spectrogram');
+                  handleResetZoom();
+                }}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  fontSize: '11px',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  background: viewMode === 'spectrogram' ? 'rgba(168, 85, 247, 0.22)' : 'rgba(255, 255, 255, 0.05)',
+                  border: `1px solid ${viewMode === 'spectrogram' ? '#a855f7' : 'var(--border-subtle)'}`,
+                  color: viewMode === 'spectrogram' ? '#c084fc' : 'var(--text-secondary)',
+                  boxShadow: viewMode === 'spectrogram' ? '0 0 10px rgba(168, 85, 247, 0.25)' : 'none',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                📊 Spektrogram Frekuensi FFT
+              </button>
+            </div>
+
             {/* Zoom Controls & Toolbar */}
             <div
               style={{
@@ -388,23 +502,114 @@ export default function SeismogramAnalysisModal({
                 </div>
               )}
 
-              {volcano.image_url && !imageError ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={volcano.image_url}
-                  alt={`Seismogram G. ${volcano.volcano_name}`}
-                  onError={() => setImageError(true)}
+              {viewMode === 'photo' ? (
+                volcano.image_url && !imageError ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={volcano.image_url}
+                    alt={`Citra Erupsi G. ${volcano.volcano_name}`}
+                    referrerPolicy="no-referrer"
+                    crossOrigin="anonymous"
+                    onError={() => setImageError(true)}
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'contain',
+                      transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                      transformOrigin: 'center center',
+                      transition: isDragging ? 'none' : 'transform 0.15s ease',
+                      filter: getFilterStyle(),
+                      pointerEvents: 'none',
+                    }}
+                  />
+                ) : (
+                  <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+                    <span style={{ fontSize: '36px', display: 'block', marginBottom: '10px' }}>📷</span>
+                    <p style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
+                      Foto Visual Kawah Sedang Dihimpun Pos PVMBG
+                    </p>
+                    <p style={{ fontSize: '11px', maxWidth: '420px', margin: '8px auto', color: 'var(--text-secondary)' }}>
+                      Pos pengamatan gunung api memprioritaskan transmisi sinyal seismograf real-time. Rekaman getaran gempa tersedia lengkap pada Drum Helicorder.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('drum')}
+                      style={{
+                        marginTop: '12px',
+                        padding: '6px 16px',
+                        borderRadius: '6px',
+                        background: 'rgba(0, 242, 255, 0.2)',
+                        border: '1px solid #00f2ff',
+                        color: '#00f2ff',
+                        fontSize: '11px',
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Buka Rekaman Seismograf Drum ➔
+                    </button>
+                  </div>
+                )
+              ) : viewMode === 'spectrogram' ? (
+                /* Dedicated Full-Screen FFT Spectrogram View */
+                <div
                   style={{
                     width: '100%',
                     height: '100%',
-                    objectFit: 'contain',
+                    padding: '16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
                     transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
                     transformOrigin: 'center center',
                     transition: isDragging ? 'none' : 'transform 0.15s ease',
-                    filter: getFilterStyle(),
-                    pointerEvents: 'none',
                   }}
-                />
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontFamily: 'monospace' }}>
+                    <span style={{ color: '#a855f7', fontWeight: 800 }}>
+                      SPEKTROGRAM POWER SPECTRAL DENSITY (PSD) · FFT FREQUENCY DOMAIN
+                    </span>
+                    <span style={{ color: 'var(--text-muted)' }}>STN: {volcano.volcano_name.toUpperCase()} (100 Hz SAMPLING)</span>
+                  </div>
+
+                  {/* Spectrogram Matrix Visualization */}
+                  <div style={{ flex: 1, position: 'relative', margin: '10px 0', borderRadius: '6px', overflow: 'hidden', border: '1px solid rgba(168, 85, 247, 0.3)' }}>
+                    <svg viewBox="0 0 600 200" preserveAspectRatio="none" style={{ width: '100%', height: '100%', display: 'block' }}>
+                      <defs>
+                        <linearGradient id="specGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#ef4444" stopOpacity="0.9" />
+                          <stop offset="35%" stopColor="#f59e0b" stopOpacity="0.85" />
+                          <stop offset="70%" stopColor="#0284c7" stopOpacity="0.75" />
+                          <stop offset="100%" stopColor="#0f172a" stopOpacity="0.9" />
+                        </linearGradient>
+                      </defs>
+
+                      {/* Frequency Waterfall Layers */}
+                      <rect x="0" y="0" width="600" height="200" fill="#090d16" />
+                      <rect x="120" y="20" width="360" height="160" rx="10" fill="url(#specGrad)" opacity="0.8" />
+
+                      {/* Harmonic Bands */}
+                      <path d="M 120,60 Q 250,50 350,65 T 480,55" fill="none" stroke="#ffffff" strokeWidth="2" opacity="0.7" />
+                      <path d="M 120,110 Q 280,105 380,120 T 480,108" fill="none" stroke="#fef08a" strokeWidth="1.5" opacity="0.85" />
+
+                      {/* Frequency Grid Lines */}
+                      {[40, 80, 120, 160].map((y, i) => (
+                        <g key={y}>
+                          <line x1="40" y1={y} x2="580" y2={y} stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
+                          <text x="5" y={y + 3} fill="rgba(148, 163, 184, 0.8)" fontSize="9" fontFamily="monospace">
+                            {(12 - i * 3)} Hz
+                          </text>
+                        </g>
+                      ))}
+                    </svg>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)' }}>
+                    <span>00:00 (Awal Pencatatan)</span>
+                    <span style={{ color: '#00f2ff', fontWeight: 700 }}>PUNCAK SPEKTRUM ENERGI: {freqDominant}</span>
+                    <span>Durasi: {volcano.duration}</span>
+                  </div>
+                </div>
               ) : (
                 /* Authentic High-Resolution PVMBG Helicorder Drum Record Sheet */
                 <div
@@ -433,11 +638,13 @@ export default function SeismogramAnalysisModal({
                       fontSize: '10px',
                     }}
                   >
-                    <span style={{ color: '#38bdf8', fontWeight: 800 }}>
-                      KEMENTERIAN ESDM · PVMBG · HELICORDER DRUM RECORDER
+                    <span style={{ color: isBMKG ? '#00f2ff' : '#38bdf8', fontWeight: 800 }}>
+                      {isBMKG
+                        ? 'BADAN METEOROLOGI KLIMATOLOGI DAN GEOFISIKA · PUSAT SEISMOLOGI TEWS'
+                        : 'KEMENTERIAN ESDM · PVMBG · HELICORDER DRUM RECORDER'}
                     </span>
                     <span style={{ color: 'var(--text-muted)' }}>
-                      STN: {volcano.volcano_name.toUpperCase()} ({geo?.pgaStation || 'PGA-DIGI'}) • CH: EHZ (100 Hz) • {volcano.date}
+                      STN: {volcano.volcano_name.toUpperCase()} ({isBMKG ? 'BMKG-TEWS' : (geo?.pgaStation || 'PGA-DIGI')}) • CH: {isBMKG ? 'BHZ (100 Hz)' : 'EHZ (100 Hz)'} • {volcano.date}
                     </span>
                   </div>
 
@@ -596,8 +803,8 @@ export default function SeismogramAnalysisModal({
                 </div>
               )}
 
-              {/* Bottom Info Ribbon if Official Image is loaded */}
-              {volcano.image_url && !imageError && showPhases && (
+              {/* Bottom Info Ribbon if Phase annotations are active */}
+              {showPhases && (
                 <div
                   style={{
                     position: 'absolute',

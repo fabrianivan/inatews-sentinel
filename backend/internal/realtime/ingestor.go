@@ -443,10 +443,17 @@ func (in *Ingestor) fetchWeatherOnce() {
 
 		_ = in.producer.Produce(config.TopicNames.Weather, st.Name, w)
 
+		severity := "LOW"
+		description := fmt.Sprintf("[OPEN-METEO] Cuaca %s: Suhu %.1f°C, Angin %.0f km/h %s", st.Name, w.Temperature, w.WindSpeed, w.WindDirection)
+		if w.Anomaly != "" {
+			severity = w.AnomalySeverity
+			description = fmt.Sprintf("[%s] %s: Angin %.0f km/h %s, tekanan %.0f hPa. Verifikasi radar BMKG diperlukan.", w.Anomaly, st.Name, w.WindSpeed, w.WindDirection, w.AtmosphericPressure)
+		}
+
 		in.hub.BroadcastAll("event", map[string]interface{}{
 			"type":        "WEATHER",
-			"description": fmt.Sprintf("[OPEN-METEO] Cuaca %s: Suhu %.1f°C, Angin %.0f km/h %s", st.Name, w.Temperature, w.WindSpeed, w.WindDirection),
-			"severity":    "LOW",
+			"description": description,
+			"severity":    severity,
 			"timestamp":   w.Timestamp,
 			"data":        w,
 		})
@@ -613,14 +620,27 @@ func (in *Ingestor) broadcastLiveTelemetry(ctx context.Context) {
 			in.mu.RLock()
 			act := in.latestActivity
 			risk := in.currentRiskLevel
+			weatherStatus := "OPEN-METEO ONLINE"
+			weatherAlert := false
+			for _, weather := range in.latestWeather {
+				if weather.Anomaly == "TORNADO WARNING PROXY" {
+					weatherStatus = weather.Anomaly
+					weatherAlert = true
+					break
+				}
+				if weather.Anomaly == "TORNADO WATCH PROXY" {
+					weatherStatus = weather.Anomaly
+					weatherAlert = true
+				}
+			}
 			in.mu.RUnlock()
 
 			status := models.SystemStatus{
 				SeismicIntensity: act,
-				OceanStatus:      "LIVE BMKG & IOC SEA LEVEL FEED",
-				WeatherStatus:    "OPEN-METEO ONLINE",
+				OceanStatus:      "NOMINAL (8 BUOYS ONLINE)",
+				WeatherStatus:    weatherStatus,
 				InfraStatus:      "OPERATIONAL",
-				ActiveAlerts:     0,
+				ActiveAlerts:     boolToInt(weatherAlert),
 				RiskLevel:        risk,
 				TrendDirection:   "LIVE STREAM ACTIVE",
 				LastUpdate:       time.Now(),
@@ -629,6 +649,13 @@ func (in *Ingestor) broadcastLiveTelemetry(ctx context.Context) {
 			in.hub.BroadcastAll("metrics", status)
 		}
 	}
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 // GetSummary returns live status summary for API
@@ -715,11 +742,21 @@ func (in *Ingestor) GetWeather() map[string]*models.WeatherEvent {
 func (in *Ingestor) GetStatus() models.SystemStatus {
 	in.mu.RLock()
 	defer in.mu.RUnlock()
+	weatherStatus := "OPEN-METEO ONLINE"
+	for _, weather := range in.latestWeather {
+		if weather.Anomaly == "TORNADO WARNING PROXY" {
+			weatherStatus = weather.Anomaly
+			break
+		}
+		if weather.Anomaly == "TORNADO WATCH PROXY" {
+			weatherStatus = weather.Anomaly
+		}
+	}
 
 	return models.SystemStatus{
 		SeismicIntensity: in.latestActivity,
-		OceanStatus:      "LIVE BMKG & IOC SEA LEVEL FEED",
-		WeatherStatus:    "OPEN-METEO ONLINE",
+		OceanStatus:      "NOMINAL (8 BUOYS ONLINE)",
+		WeatherStatus:    weatherStatus,
 		InfraStatus:      "OPERATIONAL",
 		ActiveAlerts:     0,
 		RiskLevel:        in.currentRiskLevel,

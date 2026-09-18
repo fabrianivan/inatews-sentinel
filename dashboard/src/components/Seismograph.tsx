@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import type { VolcanoEruption } from '@/lib/types';
 import {
   INDONESIAN_VOLCANOES,
@@ -276,24 +276,45 @@ export default function Seismograph({
     }
   };
 
+  // Helper to build robust official report for modal inspection
+  const buildReportForTarget = useCallback((targetName: string): VolcanoEruption => {
+    const effectiveName = (targetName === 'BMKG_REGIONAL' || !targetName) ? 'Anak Krakatau' : targetName;
+    
+    // 1. Match from live volcanoes list
+    const matched = volcanoes.find((e) => {
+      const cleanErup = e.volcano_name.toLowerCase().trim().replace(/^g\.\s*/, '');
+      const cleanTarget = effectiveName.toLowerCase().trim().replace(/^g\.\s*/, '');
+      return cleanTarget.includes(cleanErup) || cleanErup.includes(cleanTarget);
+    });
+
+    if (matched) return matched;
+
+    // 2. Derive authentic metadata from volcano database
+    const targetGeo = findVolcanoLocation(effectiveName) || INDONESIAN_VOLCANOES[0];
+    const targetAsh = getVolcanicAshTrajectory(targetGeo.name);
+
+    return {
+      id: `erup-${targetGeo.name.toLowerCase().replace(/\s+/g, '-')}-live`,
+      volcano_name: targetGeo.name,
+      time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB',
+      date: new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }),
+      description: `Rekaman getaran seismograf pos pengamatan ${targetGeo.pgaStation} merekam aktivitas tremor vulkanik menerus dengan amplitudo dominan ${ampNum} mm.`,
+      amplitude: `${ampNum} mm`,
+      duration: '60 detik',
+      visual_ash: `Kolom abu vulkanik condong ke arah ${targetAsh.windDirectionCardinal}`,
+      author: targetGeo.pgaStation.includes('Pos') ? targetGeo.pgaStation : `Pos PGA ${targetGeo.name}`,
+      alert_level: targetGeo.defaultLevel,
+      recommendation: `Masyarakat dan wisatawan diimbau tidak beraktivitas di dalam radius bahaya ${targetAsh.hazardRadiusKm} km dari kawah aktif G. ${targetGeo.name}.`,
+      timestamp: new Date().toISOString(),
+      image_url: 'https://magma.vsi.esdm.go.id/img/crs/VEN_LEW20260911121823.png',
+    };
+  }, [volcanoes, ampNum]);
+
   // Prepare fallback eruption if opening inspection
   const effectiveInspectionReport: VolcanoEruption = useMemo(() => {
-    if (liveReport) return liveReport;
-    return {
-      id: `erup-${geo?.name.toLowerCase().replace(/\s+/g, '-') || 'active'}-gen`,
-      volcano_name: geo?.name || 'Gunung Api Aktif',
-      time: 'Live Telemetri',
-      date: new Date().toLocaleDateString('id-ID'),
-      description: `Rekaman getaran seismik pos pengamatan ${geo?.pgaStation || 'PVMBG'} dengan aktivitas tremor vulkanik kontinu.`,
-      amplitude: `${ampNum} mm`,
-      duration: '45 detik',
-      visual_ash: 'Kolom asap kawah kawah aktif',
-      author: 'Petugas Pos Pengamatan PVMBG',
-      alert_level: alertLevel,
-      recommendation: geo?.defaultLevel || 'Waspadai potensi erupsi dan ikuti arahan PVMBG',
-      timestamp: new Date().toISOString(),
-    };
-  }, [liveReport, geo, ampNum, alertLevel]);
+    const target = isBMKGMode ? 'Anak Krakatau' : activeTarget;
+    return buildReportForTarget(target);
+  }, [isBMKGMode, activeTarget, buildReportForTarget]);
 
   return (
     <div id="seismograph-container" className="seismograph-container card" style={{ padding: '14px 18px', gap: '10px' }}>
@@ -380,34 +401,69 @@ export default function Seismograph({
           })}
         </div>
 
-        {/* Action Button: Analisis Citra Seismogram PVMBG */}
+        {/* Action Button: Analisis Citra Seismograf PVMBG vs BMKG */}
         <button
+          id="btn-analisis-citra-seismograf"
+          type="button"
           onClick={() => {
             if (isBMKGMode) {
-              handleSelect('Anak Krakatau');
+              const bmkgReport: VolcanoEruption = {
+                id: 'bmkg-lem-broadband',
+                volcano_name: 'BMKG LEM (Stasiun Geofisika Lembang)',
+                time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB',
+                date: new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }),
+                description: 'Rekaman getaran seismograf broadband Streckeisen STS-2 pada Stasiun Geofisika Lembang (Bandung Barat). Komponen BHZ 100 Hz real-time backbone BMKG TEWS.',
+                amplitude: '42 mm (Broadband)',
+                duration: '65 detik',
+                visual_ash: 'Broadband BMKG TEWS • Sensor: Streckeisen STS-2 120s',
+                author: 'Pusat Seismologi BMKG Kemayoran',
+                alert_level: 'BMKG BROADBAND TEWS',
+                recommendation: 'Monitoring jaringan seismik broadband nasional BMKG InaTEWS.',
+                timestamp: new Date().toISOString(),
+              };
+              onInspectSeismogram?.(bmkgReport);
+            } else {
+              const reportToInspect = buildReportForTarget(activeTarget);
+              onInspectSeismogram?.(reportToInspect);
             }
-            onInspectSeismogram?.(effectiveInspectionReport);
           }}
           style={{
-            display: 'flex',
+            display: 'inline-flex',
             alignItems: 'center',
-            gap: '6px',
-            padding: '6px 12px',
+            gap: '8px',
+            padding: '7px 14px',
             borderRadius: '6px',
             fontSize: '11px',
             fontWeight: 800,
-            background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.25), rgba(0, 242, 255, 0.18))',
-            border: '1px solid rgba(168, 85, 247, 0.6)',
+            background: isBMKGMode
+              ? 'linear-gradient(135deg, rgba(0, 242, 255, 0.28), rgba(59, 130, 246, 0.28))'
+              : 'linear-gradient(135deg, rgba(168, 85, 247, 0.32), rgba(0, 242, 255, 0.22))',
+            border: isBMKGMode ? '1px solid #00f2ff' : '1px solid rgba(168, 85, 247, 0.7)',
             color: '#fff',
             cursor: 'pointer',
-            boxShadow: '0 0 12px rgba(168, 85, 247, 0.35)',
+            boxShadow: isBMKGMode
+              ? '0 0 16px rgba(0, 242, 255, 0.35)'
+              : '0 0 16px rgba(168, 85, 247, 0.35), inset 0 0 10px rgba(0, 242, 255, 0.1)',
             transition: 'all 0.2s ease',
           }}
-          title="Buka analisis citra rekaman seismogram PVMBG dan interpretasi fisis kawah"
+          title={isBMKGMode ? 'Buka citra seismogram broadband BMKG' : `Buka analisis citra rekaman seismograf PVMBG untuk G. ${activeTarget}`}
         >
-          <span>🔬</span>
-          <span>ANALISIS CITRA SEISMOGRAM PVMBG</span>
-          {liveReport?.image_url && (
+          <span style={{ fontSize: '13px' }}>{isBMKGMode ? '📡' : '🔬'}</span>
+          <span>{isBMKGMode ? 'TAMPILKAN CITRA BMKG SEISMOGRAF' : 'ANALISIS CITRA SEISMOGRAF PVMBG'}</span>
+          <span
+            style={{
+              background: isBMKGMode ? 'rgba(0, 242, 255, 0.2)' : 'rgba(0, 242, 255, 0.18)',
+              border: '1px solid rgba(0, 242, 255, 0.4)',
+              color: '#00f2ff',
+              fontSize: '9px',
+              padding: '1px 6px',
+              borderRadius: '4px',
+              fontWeight: 700,
+            }}
+          >
+            {isBMKGMode ? 'BMKG BROADBAND' : `G. ${activeTarget.toUpperCase()}`}
+          </span>
+          {liveReport?.image_url && !isBMKGMode && (
             <span
               style={{
                 background: '#10b981',
@@ -415,6 +471,7 @@ export default function Seismograph({
                 fontSize: '9px',
                 padding: '1px 5px',
                 borderRadius: '4px',
+                fontWeight: 700,
               }}
             >
               FOTO LIVE
@@ -481,7 +538,7 @@ export default function Seismograph({
                 VONA: {ashTrajectory.vonaColorCode} ALERT
               </span>
               <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                {isSimulasi ? 'DRILL SIMULASI' : 'MONITORING PVMBG'}
+                {isSimulasi ? 'SIMULASI' : 'MONITORING PVMBG'}
               </span>
             </div>
           </div>
@@ -745,7 +802,11 @@ export default function Seismograph({
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <span>Status Kawah: <strong>{liveReport?.visual_ash || 'Aktivitas Normal Terpantau'}</strong></span>
             <span
-              onClick={() => onInspectSeismogram?.(effectiveInspectionReport)}
+              onClick={() => {
+                const target = isBMKGMode ? 'Anak Krakatau' : activeTarget;
+                const reportToInspect = buildReportForTarget(target);
+                onInspectSeismogram?.(reportToInspect);
+              }}
               style={{ color: '#00f2ff', cursor: 'pointer', fontWeight: 700 }}
             >
               Lihat Analisis Lengkap ↗

@@ -2,6 +2,8 @@
   "name": "inatews-sentinel",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
+  "author": "Fabrian Ivan Prasetya",
   "description": "InaTEWS Sentinel — Sistem Peringatan Dini Gempa & Tsunami Indonesia (Confluent Cloud + Apache Flink + Google Gemini AI)",
   "scripts": {
     "dev": "node scripts/start-all.js",

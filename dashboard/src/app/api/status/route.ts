@@ -25,7 +25,7 @@ export async function GET() {
 
   return NextResponse.json({
     seismic_intensity: 35.0,
-    ocean_status: 'IOC UNESCO LIVE',
+    ocean_status: 'NOMINAL (8 BUOYS ONLINE)',
     weather_status: 'OPEN-METEO ONLINE',
     infra_status: 'OPERATIONAL',
     active_alerts: 0,

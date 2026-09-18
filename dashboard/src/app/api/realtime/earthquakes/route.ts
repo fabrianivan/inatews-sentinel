@@ -240,6 +240,9 @@ export async function GET() {
             pga: Math.max(0.001, pga),
             fault_zone: f?.properties?.place || 'Indonesia Region',
             timestamp: f?.properties?.time ? new Date(f.properties.time).toISOString() : new Date().toISOString(),
+            url: f?.properties?.url,
+            status: f?.properties?.status,
+            tsunami: f?.properties?.tsunami,
           });
         }
       } catch {

@@ -52,6 +52,7 @@ type Simulator struct {
 	// Current computed state
 	currentActivity float64
 	trendDirection  string
+	latestWeatherAnomaly string
 
 	// Autonomous lifecycle state
 	currentPhase        LifecyclePhase
@@ -396,7 +397,7 @@ func (s *Simulator) GetStatus() models.SystemStatus {
 	return models.SystemStatus{
 		SeismicIntensity: s.currentActivity,
 		OceanStatus:      oceanStatus,
-		WeatherStatus:    "NORMAL",
+		WeatherStatus:    s.resolveWeatherStatus(),
 		InfraStatus:      infraStatus,
 		ActiveAlerts:     alerts,
 		RiskLevel:        riskLevel,
@@ -436,6 +437,15 @@ func (s *Simulator) broadcastMetrics(ctx context.Context) {
 			s.hub.BroadcastAll("activity_index", actIdx)
 		}
 	}
+}
+
+func (s *Simulator) resolveWeatherStatus() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.latestWeatherAnomaly != "" {
+		return s.latestWeatherAnomaly
+	}
+	return "NORMAL"
 }
 
 // GetLifecyclePhase returns the current phase of the autonomous simulation

@@ -72,6 +72,32 @@ func TestActivityIndexJSON(t *testing.T) {
 	}
 }
 
+func TestClassifyWeatherAnomaly(t *testing.T) {
+	tests := []struct {
+		name     string
+		wind     float64
+		pressure float64
+		anomaly  string
+		severity string
+	}{
+		{name: "warning proxy", wind: 115, pressure: 992, anomaly: "TORNADO WARNING PROXY", severity: "CRITICAL"},
+		{name: "watch proxy", wind: 95, pressure: 998, anomaly: "TORNADO WATCH PROXY", severity: "HIGH"},
+		{name: "normal", wind: 40, pressure: 1012, anomaly: "", severity: "LOW"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			anomaly, severity := models.ClassifyWeatherAnomaly(models.WeatherEvent{
+				WindSpeed:           tt.wind,
+				AtmosphericPressure: tt.pressure,
+			})
+			if anomaly != tt.anomaly || severity != tt.severity {
+				t.Fatalf("got anomaly=%q severity=%q, want anomaly=%q severity=%q", anomaly, severity, tt.anomaly, tt.severity)
+			}
+		})
+	}
+}
+
 func TestAIAnalysisJSON(t *testing.T) {
 	now := time.Now().UTC()
 	ai := models.AIAnalysis{
@@ -153,4 +179,3 @@ func TestTsunamiScenarioJSON(t *testing.T) {
 		t.Errorf("Unexpected AffectedZones: %v", ts2.AffectedZones)
 	}
 }
-

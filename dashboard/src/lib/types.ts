@@ -10,6 +10,9 @@ export interface SeismicEvent {
   pga: number;
   fault_zone: string;
   timestamp: string;
+  url?: string;
+  status?: string;
+  tsunami?: number;
 }
 
 export interface StationEvent {
@@ -131,6 +134,31 @@ export interface AIAnalysis {
   timestamp: string;
 }
 
+export interface TsunamiAffectedZoneDetail {
+  zone: string;
+  province: string;
+  estimated_eta: string;
+  estimated_wave_height: string;
+  status: 'AWAS' | 'SIAGA' | 'WASPADA';
+  inundation_depth: string;
+  population_at_risk: string;
+  safe_elevation: string;
+  coords?: [number, number];
+  polygon?: [number, number][];
+}
+
+export interface InfrastructureDamageDetail {
+  facility: string;
+  type: string;
+  location: string;
+  damage_level: 'HEAVY' | 'MODERATE' | 'LIGHT';
+  loss_estimate: string;
+  operational_status: string;
+  critical_action: string;
+  coords?: [number, number];
+  icon?: string;
+}
+
 export interface TsunamiScenario {
   active: boolean;
   detection_time: string;
@@ -140,6 +168,8 @@ export interface TsunamiScenario {
   response_actions: string[];
   severity: string;
   timestamp: string;
+  affected_zone_details?: TsunamiAffectedZoneDetail[];
+  infrastructure_impacts?: InfrastructureDamageDetail[];
 }
 
 export interface SystemStatus {
@@ -265,3 +295,68 @@ export interface AgentState {
   recent_thoughts: AgentThought[];
   recent_actions: AgentTacticalAction[];
 }
+
+export interface ConfidenceBreakdown {
+  seismic_stations: number;        // Max +35
+  cross_agency_agreement: number; // Max +20
+  satellite_insar: number;         // Max +15
+  tsunami_buoy: number;            // Max +20
+  infrastructure_signal: number;   // Max +10
+}
+
+export interface IncidentTimelineItem {
+  time: string;
+  timestamp: string;
+  title: string;
+  detail: string;
+  source: string;
+  severity: 'NORMAL' | 'ELEVATED' | 'HIGH' | 'CRITICAL';
+}
+
+export interface IncidentEvent {
+  incident_id: string;
+  hazard: string;
+  magnitude: number;
+  region: string;
+  latitude?: number;
+  longitude?: number;
+  depth?: number;
+  risk_score: number;
+  seismic_intensity: string;
+  tsunami_risk: string;
+  population_exposed: number;
+  critical_infrastructure: number;
+  road_disruptions: number;
+  confidence: number;
+  confidence_score: number;
+  confidence_breakdown: ConfidenceBreakdown;
+  status: 'MONITORING' | 'CONFIRMING' | 'ESCALATING' | 'CRITICAL' | 'STABILIZING';
+  cascading_stage: string;
+  timeline: IncidentTimelineItem[];
+  updated_at: string;
+}
+
+export interface IncidentResponseEvent {
+  incident_id: string;
+  priority: string;
+  target: string;
+  action: string;
+  reason: string[];
+  generated_at: string;
+  confidence: number;
+}
+
+export interface ReplayStatus {
+  active: boolean;
+  scenario_id: string;
+  scenario_name: string;
+  speed: number;
+  current_step: number;
+  total_steps: number;
+  elapsed_sec: number;
+  duration_sec: number;
+  stage_name: string;
+  last_event_time: string;
+  timestamp: string;
+}
+
