@@ -1,0 +1,18 @@
+[Unit]
+Description=INATEWS Sentinel Frontend
+After=network.target
+
+[Service]
+Type=simple
+User=your-user
+Group=your-user
+WorkingDirectory=/home/your-user/confluent-ai-day/dashboard
+EnvironmentFile=/etc/inatews-gcp.env
+Environment=PORT=3000
+Environment=NEXT_PUBLIC_API_URL=https://your-backend-domain
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

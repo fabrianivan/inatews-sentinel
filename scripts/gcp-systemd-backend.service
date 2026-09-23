@@ -1,0 +1,18 @@
+[Unit]
+Description=INATEWS Sentinel Backend
+After=network.target
+
+[Service]
+Type=simple
+User=your-user
+Group=your-user
+WorkingDirectory=/home/your-user/confluent-ai-day/backend
+EnvironmentFile=/etc/inatews-gcp.env
+Environment=SERVER_PORT=8080
+Environment=CORS_ORIGIN=https://your-frontend-domain
+ExecStart=/usr/local/go/bin/go run cmd/server/main.go
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

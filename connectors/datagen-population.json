@@ -1,0 +1,15 @@
+{
+  "name": "DatagenSource_Population",
+  "config": {
+    "connector.class": "DatagenSource",
+    "name": "DatagenSource_Population",
+    "kafka.auth.mode": "KAFKA_API_KEY",
+    "kafka.api.key": "${KAFKA_API_KEY}",
+    "kafka.api.secret": "${KAFKA_API_SECRET}",
+    "kafka.topic": "gempa.population",
+    "output.data.format": "JSON",
+    "tasks.max": "1",
+    "max.interval": "15000",
+    "schema.string": "{\"type\":\"record\",\"name\":\"PopEvent\",\"namespace\":\"inatews.sentinel\",\"fields\":[{\"name\":\"type\",\"type\":{\"type\":\"enum\",\"name\":\"PopType\",\"symbols\":[\"POPULATION\"]}},{\"name\":\"zone\",\"type\":{\"type\":\"enum\",\"name\":\"ZoneName\",\"symbols\":[\"Pandeglang_Banten\",\"Kalianda_Lampung\",\"Anyer_Carita\",\"Cilacap_Jateng\",\"Palu_Sulteng\",\"Denpasar_Bali\"]}},{\"name\":\"population\",\"type\":{\"type\":\"int\",\"arg.properties\":{\"range\":{\"min\":50000,\"max\":5000000}}}},{\"name\":\"shelter_capacity\",\"type\":{\"type\":\"int\",\"arg.properties\":{\"range\":{\"min\":500,\"max\":50000}}}},{\"name\":\"evacuation_route_status\",\"type\":{\"type\":\"enum\",\"name\":\"EvacStatus\",\"symbols\":[\"CLEAR\",\"PARTIAL_BLOCKAGE\",\"BLOCKED\"]}},{\"name\":\"evacuation_readiness\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":0.3,\"max\":1.0}}}}]}"
+  }
+}

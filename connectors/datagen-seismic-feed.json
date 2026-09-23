@@ -1,0 +1,15 @@
+{
+  "name": "DatagenSource_SeismicFeed",
+  "config": {
+    "connector.class": "DatagenSource",
+    "name": "DatagenSource_SeismicFeed",
+    "kafka.auth.mode": "KAFKA_API_KEY",
+    "kafka.api.key": "${KAFKA_API_KEY}",
+    "kafka.api.secret": "${KAFKA_API_SECRET}",
+    "kafka.topic": "gempa.seismic",
+    "output.data.format": "JSON",
+    "tasks.max": "1",
+    "max.interval": "5000",
+    "schema.string": "{\"type\":\"record\",\"name\":\"SeismicEvent\",\"namespace\":\"inatews.sentinel\",\"fields\":[{\"name\":\"type\",\"type\":{\"type\":\"enum\",\"name\":\"SeismicType\",\"symbols\":[\"SEISMIC\"]}},{\"name\":\"magnitude\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":2.0,\"max\":8.5}}}},{\"name\":\"depth\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":5.0,\"max\":300.0}}}},{\"name\":\"frequency\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":0.5,\"max\":15.0}}}},{\"name\":\"count\",\"type\":{\"type\":\"int\",\"arg.properties\":{\"range\":{\"min\":1,\"max\":20}}}},{\"name\":\"latitude\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":-11.0,\"max\":6.0}}}},{\"name\":\"longitude\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":95.0,\"max\":141.0}}}},{\"name\":\"mmi\",\"type\":{\"type\":\"int\",\"arg.properties\":{\"range\":{\"min\":1,\"max\":10}}}},{\"name\":\"pga\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":0.01,\"max\":1.2}}}},{\"name\":\"fault_zone\",\"type\":{\"type\":\"enum\",\"name\":\"FaultZone\",\"symbols\":[\"Sunda_Strait_Megathrust\",\"Java_Trench\",\"Timor_Trough\",\"Sulawesi_Palu_Koro\",\"Banda_Arc\",\"Mentawai_Patch\",\"Halmahera_Subduction\"]}}]}"
+  }
+}

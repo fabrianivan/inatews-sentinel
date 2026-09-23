@@ -1,0 +1,15 @@
+{
+  "name": "DatagenSource_SatelliteInSAR",
+  "config": {
+    "connector.class": "DatagenSource",
+    "name": "DatagenSource_SatelliteInSAR",
+    "kafka.auth.mode": "KAFKA_API_KEY",
+    "kafka.api.key": "${KAFKA_API_KEY}",
+    "kafka.api.secret": "${KAFKA_API_SECRET}",
+    "kafka.topic": "gempa.satellite",
+    "output.data.format": "JSON",
+    "tasks.max": "1",
+    "max.interval": "10000",
+    "schema.string": "{\"type\":\"record\",\"name\":\"SatelliteEvent\",\"namespace\":\"inatews.sentinel\",\"fields\":[{\"name\":\"type\",\"type\":{\"type\":\"enum\",\"name\":\"SatType\",\"symbols\":[\"SATELLITE\"]}},{\"name\":\"ground_displacement\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":0.0,\"max\":15.0}}}},{\"name\":\"deformation\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":-5.0,\"max\":10.0}}}},{\"name\":\"coseismic_slip\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":0.0,\"max\":8.0}}}},{\"name\":\"satellite_id\",\"type\":{\"type\":\"enum\",\"name\":\"SatID\",\"symbols\":[\"SENTINEL_1A\",\"SENTINEL_1B\",\"ALOS_2\",\"CSK\",\"TerraSAR_X\"]}}]}"
+  }
+}

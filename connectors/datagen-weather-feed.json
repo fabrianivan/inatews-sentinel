@@ -1,0 +1,15 @@
+{
+  "name": "DatagenSource_WeatherFeed",
+  "config": {
+    "connector.class": "DatagenSource",
+    "name": "DatagenSource_WeatherFeed",
+    "kafka.auth.mode": "KAFKA_API_KEY",
+    "kafka.api.key": "${KAFKA_API_KEY}",
+    "kafka.api.secret": "${KAFKA_API_SECRET}",
+    "kafka.topic": "gempa.weather",
+    "output.data.format": "JSON",
+    "tasks.max": "1",
+    "max.interval": "8000",
+    "schema.string": "{\"type\":\"record\",\"name\":\"WeatherEvent\",\"namespace\":\"inatews.sentinel\",\"fields\":[{\"name\":\"type\",\"type\":{\"type\":\"enum\",\"name\":\"WeatherType\",\"symbols\":[\"WEATHER\"]},\"default\":\"WEATHER\"},{\"name\":\"wind_speed\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":0.0,\"max\":120.0}}}},{\"name\":\"wind_direction\",\"type\":{\"type\":\"enum\",\"name\":\"WindDir\",\"symbols\":[\"N\",\"NE\",\"E\",\"SE\",\"S\",\"SW\",\"W\",\"NW\"]}},{\"name\":\"rainfall\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":0.0,\"max\":80.0}}}},{\"name\":\"atmospheric_pressure\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":980.0,\"max\":1025.0}}}},{\"name\":\"temperature\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":22.0,\"max\":38.0}}}},{\"name\":\"humidity\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":40.0,\"max\":100.0}}}}]}"
+  }
+}

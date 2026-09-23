@@ -1,0 +1,15 @@
+{
+  "name": "DatagenSource_Infrastructure",
+  "config": {
+    "connector.class": "DatagenSource",
+    "name": "DatagenSource_Infrastructure",
+    "kafka.auth.mode": "KAFKA_API_KEY",
+    "kafka.api.key": "${KAFKA_API_KEY}",
+    "kafka.api.secret": "${KAFKA_API_SECRET}",
+    "kafka.topic": "gempa.infrastructure",
+    "output.data.format": "JSON",
+    "tasks.max": "1",
+    "max.interval": "12000",
+    "schema.string": "{\"type\":\"record\",\"name\":\"InfraEvent\",\"namespace\":\"inatews.sentinel\",\"fields\":[{\"name\":\"type\",\"type\":{\"type\":\"enum\",\"name\":\"InfraType\",\"symbols\":[\"INFRASTRUCTURE\"]}},{\"name\":\"facility_id\",\"type\":{\"type\":\"enum\",\"name\":\"FacilityID\",\"symbols\":[\"HOSP_RSCM_01\",\"BRDG_SURAMADU_02\",\"PLTU_SURALAYA_03\",\"PORT_BAKAUHENI_04\",\"HOSP_RSHS_05\",\"BRDG_TIMOR_06\"]}},{\"name\":\"facility_name\",\"type\":{\"type\":\"enum\",\"name\":\"FacilityName\",\"symbols\":[\"RSCM_Jakarta\",\"Suramadu_Bridge\",\"PLTU_Suralaya\",\"Port_Bakauheni\",\"RSHS_Bandung\",\"Timor_Bridge\"]}},{\"name\":\"facility_type\",\"type\":{\"type\":\"enum\",\"name\":\"FacType\",\"symbols\":[\"HOSPITAL\",\"BRIDGE\",\"POWER_PLANT\",\"PORT\"]}},{\"name\":\"latitude\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":-8.5,\"max\":5.5}}}},{\"name\":\"longitude\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":95.0,\"max\":141.0}}}},{\"name\":\"damage_level\",\"type\":{\"type\":\"enum\",\"name\":\"DamageLvl\",\"symbols\":[\"NONE\",\"MINOR\",\"MODERATE\",\"SEVERE\"]}},{\"name\":\"operational\",\"type\":{\"type\":\"enum\",\"name\":\"OpStatus\",\"symbols\":[\"OPERATIONAL\",\"DISRUPTED\",\"OFFLINE\"]}}]}"
+  }
+}

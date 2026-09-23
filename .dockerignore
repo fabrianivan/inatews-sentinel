@@ -1,0 +1,9 @@
+**/.git
+**/.next
+**/node_modules
+**/dist
+**/tmp
+**/.DS_Store
+**/*.log
+backend/.env
+.dashboard/.env

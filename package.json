@@ -1,0 +1,28 @@
+{
+  "name": "inatews-sentinel",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "author": "Fabrian Ivan Prasetya",
+  "description": "InaTEWS Sentinel — Sistem Peringatan Dini Gempa & Tsunami Indonesia (Confluent Cloud + Apache Flink)",
+  "scripts": {
+    "dev": "node scripts/start-all.js",
+    "dev:all": "node scripts/start-all.js",
+    "dev:frontend": "cd dashboard && npm run dev",
+    "dev:backend": "cd backend && go run cmd/server/main.go",
+    "build": "cd dashboard && npm run build",
+    "start": "node scripts/start-all.js",
+    "test:backend": "cd backend && go test -v ./...",
+    "lint": "cd dashboard && npm run lint",
+    "deploy:flink": "./scripts/deploy-flink.sh"
+  },
+  "keywords": [
+    "confluent",
+    "kafka",
+    "flink",
+    "nextjs",
+    "earthquake",
+    "tsunami",
+    "disaster-alert"
+  ]
+}

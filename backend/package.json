@@ -1,0 +1,9 @@
+{
+  "name": "krakatau-sentinel-backend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "go run cmd/server/main.go",
+    "start": "go run cmd/server/main.go"
+  }
+}

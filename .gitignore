@@ -1,0 +1,56 @@
+# Environment & secrets
+.env
+.env*.local
+!.env.example
+
+# Generated connector configs
+connectors/.rendered/
+
+
+# Go binaries & build artifacts
+/backend/server
+/backend/inatews-backend
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Node dependencies
+node_modules/
+dashboard/node_modules/
+.pnp
+.pnp.js
+
+# Next.js build outputs
+dashboard/.next/
+dashboard/out/
+.next/
+out/
+build/
+dist/
+
+# OS & Editor
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.vercel

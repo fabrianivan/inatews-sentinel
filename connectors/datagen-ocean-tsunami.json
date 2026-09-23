@@ -1,0 +1,15 @@
+{
+  "name": "DatagenSource_OceanTsunami",
+  "config": {
+    "connector.class": "DatagenSource",
+    "name": "DatagenSource_OceanTsunami",
+    "kafka.auth.mode": "KAFKA_API_KEY",
+    "kafka.api.key": "${KAFKA_API_KEY}",
+    "kafka.api.secret": "${KAFKA_API_SECRET}",
+    "kafka.topic": "gempa.tsunami",
+    "output.data.format": "JSON",
+    "tasks.max": "1",
+    "max.interval": "4000",
+    "schema.string": "{\"type\":\"record\",\"name\":\"OceanEvent\",\"namespace\":\"inatews.sentinel\",\"fields\":[{\"name\":\"type\",\"type\":{\"type\":\"enum\",\"name\":\"OceanType\",\"symbols\":[\"OCEAN\"]}},{\"name\":\"sensor_id\",\"type\":{\"type\":\"enum\",\"name\":\"BuoyID\",\"symbols\":[\"DART_INA_01_Sunda\",\"DART_INA_02_Java\",\"DART_INA_03_Timor\",\"DART_INA_04_Sulawesi\",\"DART_INA_05_Banda\",\"TG_MERAK_01\",\"TG_CILACAP_02\",\"TG_BENOA_03\"]}},{\"name\":\"sea_level\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":-0.5,\"max\":3.0}}}},{\"name\":\"wave_height\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":0.01,\"max\":5.0}}}},{\"name\":\"tsunami_sensor_reading\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":0.0,\"max\":8.0}}}},{\"name\":\"buoy_data\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":0.0,\"max\":5.0}}}},{\"name\":\"wave_eta\",\"type\":{\"type\":\"int\",\"arg.properties\":{\"range\":{\"min\":0,\"max\":120}}}},{\"name\":\"latitude\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":-12.0,\"max\":6.0}}}},{\"name\":\"longitude\",\"type\":{\"type\":\"double\",\"arg.properties\":{\"range\":{\"min\":95.0,\"max\":141.0}}}}]}"
+  }
+}
