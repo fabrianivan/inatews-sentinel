@@ -1,11 +1,34 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import type { AIAnalysis, AgentState, AgentThought, AgentTacticalAction } from '@/lib/types';
+import {
+  Activity,
+  AlertTriangle,
+  Bot,
+  Brain,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  Cloud,
+  Cpu,
+  Lightbulb,
+  MessageSquare,
+  Send,
+  Sparkles,
+} from 'lucide-react';
+import type {
+  AIAnalysis,
+  AgentState,
+  AgentThought,
+  AgentTacticalAction,
+} from '@/lib/types';
+import type { TelemetryPromptContext } from '@/lib/aiContext';
 import { fetchAIProvider, switchAIProvider, fetchAgentState } from '@/hooks/useSSE';
 
 interface AIPanelProps {
   analysis: AIAnalysis;
+  telemetryContext?: TelemetryPromptContext;
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_BASE || '';
@@ -20,62 +43,82 @@ const SUGGESTED_PROMPTS = [
 const AGENT_SUGGESTED_PROMPTS = [
   'Apa direktif evakuasi darurat yang saat ini aktif diputuskan agen?',
   'Bagaimana korelasi tremor dan anomali sensor tsunami dalam memori kerja?',
-  'Jelaskan kesimpulan siklus OODA (Observe-Orient-Decide-Act) terkini!',
+  'Jelaskan kesimpulan siklus OODA terkini!',
   'Apakah jembatan antar-pulau dan pelabuhan perlu ditutup sekarang?',
 ];
 
-function statusClass(status: string): string {
+function statusStyle(status: string): string {
   switch (status.toUpperCase()) {
-    case 'CRITICAL': return 'ai-panel__status--critical';
-    case 'HIGH': return 'ai-panel__status--high';
-    case 'ELEVATED': return 'ai-panel__status--elevated';
-    case 'ADVISORY': return 'ai-panel__status--advisory';
-    default: return 'ai-panel__status--normal';
+    case 'CRITICAL':
+      return 'border-[var(--sev-critical-border)] bg-[var(--sev-critical-bg)] text-[var(--sev-critical)]';
+    case 'HIGH':
+      return 'border-[var(--sev-high-border)] bg-[var(--sev-high-bg)] text-[var(--sev-high)]';
+    case 'ELEVATED':
+      return 'border-[var(--sev-elevated-border)] bg-[var(--sev-elevated-bg)] text-[var(--sev-elevated)]';
+    case 'ADVISORY':
+      return 'border-[var(--accent-border)] bg-[var(--accent-muted)] text-[var(--accent)]';
+    default:
+      return 'border-[var(--sev-normal-border)] bg-[var(--sev-normal-bg)] text-[var(--sev-normal)]';
   }
 }
 
-function priorityColor(priority: string): string {
+function priorityStyle(priority: string): string {
   switch (priority.toUpperCase()) {
     case 'CRITICAL':
-    case 'IMMEDIATE': return '#ff2a5f';
+    case 'IMMEDIATE':
+      return 'border-[var(--sev-critical-border)] bg-[var(--sev-critical-bg)] text-[var(--sev-critical)]';
     case 'URGENT':
-    case 'HIGH': return '#ff9100';
-    default: return '#00f2ff';
+    case 'HIGH':
+      return 'border-[var(--sev-high-border)] bg-[var(--sev-high-bg)] text-[var(--sev-high)]';
+    default:
+      return 'border-[var(--accent-border)] bg-[var(--accent-muted)] text-[var(--accent)]';
   }
 }
 
-function phaseBadge(phase: string) {
+function phaseStyle(phase: string): { badge: string; borderLeft: string } {
   switch (phase.toUpperCase()) {
     case 'OBSERVE':
-      return { bg: 'rgba(0, 242, 255, 0.15)', border: '#00f2ff', text: '#00f2ff' };
+      return {
+        badge: 'border-[var(--accent-border)] bg-[var(--accent-muted)] text-[var(--accent)]',
+        borderLeft: 'border-l-[var(--accent)]',
+      };
     case 'ORIENT':
-      return { bg: 'rgba(168, 85, 247, 0.15)', border: '#a855f7', text: '#c084fc' };
+      return {
+        badge: 'border-purple-500/40 bg-purple-500/10 text-purple-400',
+        borderLeft: 'border-l-purple-500',
+      };
     case 'DECIDE':
-      return { bg: 'rgba(245, 158, 11, 0.15)', border: '#f59e0b', text: '#fbbf24' };
+      return {
+        badge: 'border-[var(--sev-elevated-border)] bg-[var(--sev-elevated-bg)] text-[var(--sev-elevated)]',
+        borderLeft: 'border-l-[var(--sev-elevated)]',
+      };
     case 'ACT':
-      return { bg: 'rgba(255, 42, 95, 0.2)', border: '#ff2a5f', text: '#ff2a5f' };
+      return {
+        badge: 'border-[var(--sev-critical-border)] bg-[var(--sev-critical-bg)] text-[var(--sev-critical)]',
+        borderLeft: 'border-l-[var(--sev-critical)]',
+      };
     default:
-      return { bg: 'rgba(255, 255, 255, 0.1)', border: '#94a3b8', text: '#cbd5e1' };
+      return {
+        badge: 'border-[var(--border-hairline)] bg-[var(--surface-2)] text-[var(--text-secondary)]',
+        borderLeft: 'border-l-[var(--border-strong)]',
+      };
   }
 }
 
-export default function AIPanel({ analysis }: AIPanelProps) {
-  const [activeTab, setActiveTab] = useState<'assessment' | 'hazard' | 'copilot' | 'agent'>('assessment');
+export default function AIPanel({ analysis, telemetryContext }: AIPanelProps) {
   const [showExplain, setShowExplain] = useState(false);
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
 
-  // AI Provider State
   const [activeProvider, setActiveProvider] = useState<string>('gemini');
   const [activeModel, setActiveModel] = useState<string>('Google Gemini 2.5 Flash');
   const [switchingProvider, setSwitchingProvider] = useState(false);
   const [providerToast, setProviderToast] = useState<string | null>(null);
 
-  // Copilot Interactive State
   const [question, setQuestion] = useState('');
   const [copilotReply, setCopilotReply] = useState<string | null>(null);
   const [copilotLoading, setCopilotLoading] = useState(false);
   const [copilotLatency, setCopilotLatency] = useState<number | null>(null);
 
-  // Streaming Agent State
   const [agentState, setAgentState] = useState<AgentState | null>(null);
   const [agentQuestion, setAgentQuestion] = useState('');
   const [agentStreaming, setAgentStreaming] = useState(false);
@@ -84,7 +127,6 @@ export default function AIPanel({ analysis }: AIPanelProps) {
   const [agentLiveActions, setAgentLiveActions] = useState<AgentTacticalAction[]>([]);
   const streamAbortController = useRef<AbortController | null>(null);
 
-  // Fetch initial AI provider and Agent state
   useEffect(() => {
     fetchAIProvider()
       .then((data) => {
@@ -107,7 +149,6 @@ export default function AIPanel({ analysis }: AIPanelProps) {
       .catch(() => {});
   }, []);
 
-  // Poll agent state when agent tab is active or periodic interval
   useEffect(() => {
     const timer = setInterval(() => {
       fetchAgentState()
@@ -124,12 +165,11 @@ export default function AIPanel({ analysis }: AIPanelProps) {
           }
         })
         .catch(() => {});
-    }, 3500);
+    }, 15000);
 
     return () => clearInterval(timer);
   }, []);
 
-  // Handle Switching AI Provider (Gemini <-> AWS Bedrock)
   const handleSwitchProvider = async (target: string) => {
     if (target === activeProvider || switchingProvider) return;
     setSwitchingProvider(true);
@@ -138,16 +178,28 @@ export default function AIPanel({ analysis }: AIPanelProps) {
       if (res && res.active) {
         setActiveProvider(res.active);
         setActiveModel(res.model);
-        setProviderToast(`AI Provider berhasil diganti ke ${res.active.toUpperCase()} (${res.model})`);
-        setTimeout(() => setProviderToast(null), 4000);
+        setProviderToast(`Provider AI dialihkan ke ${res.model}`);
+        setTimeout(() => setProviderToast(null), 3500);
+        fetchAgentState()
+          .then((data) => {
+            if (data && typeof data === 'object') {
+              setAgentState(data as AgentState);
+            }
+          })
+          .catch(() => {});
       }
     } catch {
-      setProviderToast('Gagal mengganti AI provider');
+      setProviderToast('Gagal mengganti provider AI');
       setTimeout(() => setProviderToast(null), 3000);
     } finally {
       setSwitchingProvider(false);
     }
   };
+
+  const buildRequestContext = (): TelemetryPromptContext => ({
+    ...telemetryContext,
+    provider: activeProvider === 'bedrock' ? 'bedrock' : 'gemini',
+  });
 
   const handleAskCopilot = async (qText?: string) => {
     const query = qText || question;
@@ -156,12 +208,25 @@ export default function AIPanel({ analysis }: AIPanelProps) {
     setCopilotLoading(true);
     setCopilotReply(null);
 
+    const payload = JSON.stringify({
+      question: query,
+      context: buildRequestContext(),
+    });
+
     try {
-      const res = await fetch(`${API_BASE}/api/ai/ask`, {
+      let res = await fetch(`${API_BASE}/api/ai/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: query }),
+        body: payload,
       });
+
+      if (!res.ok && API_BASE) {
+        res = await fetch('/api/ai/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: payload,
+        });
+      }
 
       if (!res.ok) throw new Error('Copilot request failed');
       const data = await res.json();
@@ -169,15 +234,14 @@ export default function AIPanel({ analysis }: AIPanelProps) {
       setCopilotLatency(data.latency_ms || null);
     } catch {
       setCopilotReply(
-        'Berdasarkan pemodelan heuristik darurat: Prioritaskan pengosongan area pesisir dalam radius 2 km segera, aktifkan sirine EWS tsunami, dan amankan gedung evakuasi vertikal di dataran tinggi (>25 meter).'
+        'Berdasarkan analisis heuristik darurat: Prioritaskan pengosongan pesisir radius 2 km, aktifkan sirine InaTEWS, dan arahkan warga ke tempat evakuasi vertikal (>20 meter dpl).'
       );
-      setCopilotLatency(180);
+      setCopilotLatency(150);
     } finally {
       setCopilotLoading(false);
     }
   };
 
-  // Handle Token-by-Token Streaming Chat with Autonomous Agent
   const handleAskAgentStream = async (qText?: string) => {
     const query = qText || agentQuestion;
     if (!query.trim() || agentStreaming) return;
@@ -191,16 +255,29 @@ export default function AIPanel({ analysis }: AIPanelProps) {
     const abortController = new AbortController();
     streamAbortController.current = abortController;
 
+    const payload = JSON.stringify({
+      question: query,
+      context: buildRequestContext(),
+    });
+
     try {
-      const res = await fetch(`${API_BASE}/api/agent/chat/stream`, {
+      let res = await fetch(`${API_BASE}/api/agent/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: query }),
+        body: payload,
         signal: abortController.signal,
       });
 
-      if (!res.ok) throw new Error('Agent streaming request failed');
-      if (!res.body) throw new Error('No readable stream available');
+      if (!res.ok && API_BASE) {
+        res = await fetch('/api/agent/chat/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: payload,
+          signal: abortController.signal,
+        });
+      }
+
+      if (!res.ok || !res.body) throw new Error('Agent streaming request failed');
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -229,7 +306,7 @@ export default function AIPanel({ analysis }: AIPanelProps) {
                 setAgentStreamAnswer(fullText);
               }
             } catch {
-              // Ignore partial JSON chunks
+              // ignore partial chunks
             }
           }
         }
@@ -241,7 +318,7 @@ export default function AIPanel({ analysis }: AIPanelProps) {
     } catch (err: unknown) {
       if ((err as Error)?.name !== 'AbortError') {
         setAgentStreamAnswer(
-          'Streaming Heuristik Agen: Mengamati parameter telemetri aktif. Tingkat risiko terpantau kritis dengan anomali tinggi gelombang terverifikasi. Rekomendasi: Eksekusi evakuasi zona merah segera.'
+          'Mode Heuristik Agen: Mengamati telemetri aktif. Ikuti instruksi evakuasi darurat sesuai status tingkat ancaman.'
         );
       }
     } finally {
@@ -250,721 +327,439 @@ export default function AIPanel({ analysis }: AIPanelProps) {
   };
 
   return (
-    <div className="card ai-panel">
-      {/* Provider Switch Toast Notification */}
+    <div className="matte-card overflow-hidden">
       {providerToast && (
-        <div style={{
-          background: 'rgba(0, 242, 255, 0.9)',
-          color: '#060a14',
-          fontWeight: 700,
-          fontSize: '12px',
-          padding: '8px 16px',
-          borderRadius: '4px',
-          textAlign: 'center',
-          letterSpacing: '0.4px',
-          transition: 'all 0.3s ease',
-        }}>
-          ⚡ {providerToast}
+        <div className="border-b border-[var(--accent-border)] bg-[var(--accent-muted)] px-4 py-2 text-center text-xs font-semibold text-[var(--accent)]">
+          {providerToast}
         </div>
       )}
 
-      {/* Header with Model identity, Provider Switcher & Confidence */}
-      <div className="card__header" style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-          <span className="card__title">
-            <span className="card__title-icon">⚡</span>
-            InaTEWS Intelligence AI
-          </span>
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-hairline)] px-5 py-4 sm:px-6">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 text-sm font-bold text-[var(--text-primary)]">
+            <Bot className="h-4 w-4 text-[var(--accent)]" />
+            <span>Analisis AI Sentinel &amp; Kopilot Keputusan</span>
+          </div>
 
-          {/* AI Provider Switcher (Gemini vs AWS Bedrock) */}
-          <div style={{
-            display: 'inline-flex',
-            background: 'rgba(15, 23, 42, 0.9)',
-            border: '1px solid rgba(255, 255, 255, 0.12)',
-            borderRadius: '20px',
-            padding: '2px',
-            gap: '2px',
-          }}>
+          {/* Provider Switch */}
+          <div className="inline-flex rounded-full bg-[var(--surface-2)] p-0.5">
             <button
+              type="button"
               onClick={() => handleSwitchProvider('gemini')}
               disabled={switchingProvider}
-              style={{
-                background: activeProvider === 'gemini' ? 'linear-gradient(135deg, #00f2ff, #0077ff)' : 'transparent',
-                color: activeProvider === 'gemini' ? '#060a14' : '#94a3b8',
-                border: 'none',
-                borderRadius: '16px',
-                padding: '3px 10px',
-                fontSize: '10.5px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                transition: 'all 0.2s',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-              }}
+              className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-semibold transition-colors ${
+                activeProvider === 'gemini'
+                  ? 'bg-[var(--accent-strong)] text-white shadow-2xs'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
             >
-              <span>♊</span>
+              <Sparkles className="h-3 w-3" />
               <span>Gemini 2.5</span>
             </button>
             <button
+              type="button"
               onClick={() => handleSwitchProvider('bedrock')}
               disabled={switchingProvider}
-              style={{
-                background: activeProvider === 'bedrock' ? 'linear-gradient(135deg, #ff9100, #ff2a5f)' : 'transparent',
-                color: activeProvider === 'bedrock' ? '#ffffff' : '#94a3b8',
-                border: 'none',
-                borderRadius: '16px',
-                padding: '3px 10px',
-                fontSize: '10.5px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                transition: 'all 0.2s',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-              }}
+              className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-semibold transition-colors ${
+                activeProvider === 'bedrock'
+                  ? 'bg-[var(--sev-high)] text-white shadow-2xs'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
             >
-              <span>☁️</span>
+              <Cloud className="h-3 w-3" />
               <span>AWS Bedrock</span>
             </button>
           </div>
-
-          <span style={{ fontSize: '10px', background: 'rgba(0, 242, 255, 0.08)', border: '1px solid rgba(0, 242, 255, 0.3)', color: '#00f2ff', padding: '2px 8px', borderRadius: '12px', fontWeight: 600 }}>
-            {activeModel}
-          </span>
-
-          {analysis.latency_ms ? (
-            <span style={{ fontSize: '10px', color: '#94a3b8' }}>
-              ⏱ {analysis.latency_ms}ms latency
-            </span>
-          ) : null}
         </div>
 
-        <div className="ai-panel__confidence" style={{ margin: 0 }}>
-          <span className="ai-panel__confidence-label">
-            Confidence: {Math.round((analysis.confidence || 0.95) * 100)}%
+        {/* Confidence & Latency */}
+        <div className="flex items-center gap-3 font-mono text-[11px] text-[var(--text-secondary)]">
+          {analysis.latency_ms ? (
+            <span className="inline-flex items-center gap-1 text-[var(--text-muted)] tabular-nums">
+              <Clock className="h-3 w-3" />
+              {analysis.latency_ms}ms
+            </span>
+          ) : null}
+          <span className="font-semibold tabular-nums">
+            Keyakinan {Math.round((analysis.confidence || 0.9) * 100)}%
           </span>
-          <div className="ai-panel__confidence-bar">
-            <div
-              className="ai-panel__confidence-fill"
-              style={{ width: `${(analysis.confidence || 0.95) * 100}%` }}
-            />
-          </div>
         </div>
       </div>
 
-      <div className="card__body">
-        {/* Threat Summary Banner */}
-        {analysis.threat_summary && (
-          <div style={{
-            background: 'rgba(15, 23, 42, 0.8)',
-            borderLeft: `4px solid ${analysis.status === 'CRITICAL' ? '#ff2a5f' : analysis.status === 'HIGH' ? '#ff9100' : '#00f2ff'}`,
-            padding: '10px 14px',
-            borderRadius: '4px',
-            marginBottom: '14px',
-            fontSize: '13px',
-            fontWeight: 600,
-            color: '#f8fafc',
-            lineHeight: 1.5,
-          }}>
-            <span style={{ color: '#00f2ff', marginRight: '6px' }}>EXECUTIVE ASSESSMENT:</span>
-            {analysis.threat_summary}
+      <div className="space-y-6 p-5 sm:p-6">
+        {/* Editorial Executive Assessment Pull Quote */}
+        {(analysis.threat_summary || analysis.assessment) && (
+          <div
+            className={`border-l-2 pl-4 ${
+              analysis.status === 'CRITICAL'
+                ? 'border-[var(--sev-critical)]'
+                : analysis.status === 'HIGH'
+                  ? 'border-[var(--sev-high)]'
+                  : 'border-[var(--accent)]'
+            }`}
+          >
+            <div className="mb-1.5 flex flex-wrap items-center gap-2">
+              <span className="font-mono text-[10px] font-bold tracking-[0.14em] text-[var(--text-muted)] uppercase">
+                Ringkasan Situasi AI
+              </span>
+              <span
+                className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-bold ${statusStyle(
+                  analysis.status
+                )}`}
+              >
+                {analysis.status}
+              </span>
+            </div>
+            <p className="font-serif text-base leading-relaxed font-medium text-[var(--text-primary)] sm:text-lg">
+              {analysis.threat_summary || analysis.assessment}
+            </p>
+            {analysis.threat_summary && analysis.assessment && (
+              <p className="mt-2 text-xs leading-relaxed text-[var(--text-secondary)]">
+                {analysis.assessment}
+              </p>
+            )}
           </div>
         )}
 
-        {/* Tab Navigation Controls */}
-        <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
-          <button
-            onClick={() => setActiveTab('assessment')}
-            style={{
-              background: activeTab === 'assessment' ? 'rgba(0, 242, 255, 0.15)' : 'transparent',
-              color: activeTab === 'assessment' ? '#00f2ff' : '#94a3b8',
-              border: activeTab === 'assessment' ? '1px solid #00f2ff' : '1px solid transparent',
-              borderRadius: '6px',
-              padding: '6px 14px',
-              fontSize: '11px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              letterSpacing: '0.6px',
-              transition: 'all 0.2s',
-            }}
-          >
-            📋 TACTICAL ASSESSMENT
-          </button>
-          <button
-            onClick={() => setActiveTab('hazard')}
-            style={{
-              background: activeTab === 'hazard' ? 'rgba(0, 242, 255, 0.15)' : 'transparent',
-              color: activeTab === 'hazard' ? '#00f2ff' : '#94a3b8',
-              border: activeTab === 'hazard' ? '1px solid #00f2ff' : '1px solid transparent',
-              borderRadius: '6px',
-              padding: '6px 14px',
-              fontSize: '11px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              letterSpacing: '0.6px',
-              transition: 'all 0.2s',
-            }}
-          >
-            🔬 RUPTURE & HAZARD DEEP-DIVE
-          </button>
-          <button
-            onClick={() => setActiveTab('copilot')}
-            style={{
-              background: activeTab === 'copilot' ? 'rgba(255, 42, 95, 0.15)' : 'transparent',
-              color: activeTab === 'copilot' ? '#ff2a5f' : '#94a3b8',
-              border: activeTab === 'copilot' ? '1px solid #ff2a5f' : '1px solid transparent',
-              borderRadius: '6px',
-              padding: '6px 14px',
-              fontSize: '11px',
-              fontWeight: 700,
-              cursor: 'pointer',
-              letterSpacing: '0.6px',
-              transition: 'all 0.2s',
-            }}
-          >
-            💬 TANYA COPILOT
-          </button>
-          <button
-            onClick={() => setActiveTab('agent')}
-            style={{
-              background: activeTab === 'agent' ? 'linear-gradient(135deg, rgba(0, 242, 255, 0.2), rgba(168, 85, 247, 0.25))' : 'rgba(255, 255, 255, 0.03)',
-              color: activeTab === 'agent' ? '#00f2ff' : '#cbd5e1',
-              border: activeTab === 'agent' ? '1px solid #00f2ff' : '1px solid rgba(255, 255, 255, 0.1)',
-              borderRadius: '6px',
-              padding: '6px 14px',
-              fontSize: '11px',
-              fontWeight: 800,
-              cursor: 'pointer',
-              letterSpacing: '0.6px',
-              transition: 'all 0.2s',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-            }}
-          >
-            <span>🤖</span>
-            <span>STREAMING DATA AGENT</span>
-            <span style={{
-              fontSize: '9px',
-              padding: '1px 6px',
-              borderRadius: '8px',
-              background: agentState?.status === 'ACTION_DISPATCHED' ? '#ff2a5f' : agentState?.status === 'REASONING' ? '#f59e0b' : '#10b981',
-              color: '#fff',
-              fontWeight: 700,
-            }}>
-              {agentState?.status || 'MONITORING'}
-            </span>
-          </button>
+        {/* Calm Scannable Observations & Recommendations */}
+        <div className="grid grid-cols-1 gap-6 border-t border-[var(--border-hairline)] pt-5 md:grid-cols-2">
+          <div>
+            <div className="mb-2.5 font-mono text-[10px] font-bold tracking-[0.14em] text-[var(--text-muted)] uppercase">
+              Observasi Telemetri Kunci
+            </div>
+            <ul className="space-y-2 text-xs leading-relaxed text-[var(--text-secondary)]">
+              {analysis.observations?.slice(0, 4).map((obs, i) => (
+                <li key={i} className="flex items-start gap-2.5">
+                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
+                  <span>{obs}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div>
+            <div className="mb-2.5 font-mono text-[10px] font-bold tracking-[0.14em] text-[var(--text-muted)] uppercase">
+              Rekomendasi Tindakan Segera
+            </div>
+            <ol className="space-y-2 text-xs leading-relaxed text-[var(--text-primary)]">
+              {analysis.recommendations?.slice(0, 4).map((rec, i) => (
+                <li key={i} className="flex items-start gap-2.5">
+                  <span className="font-mono text-[11px] font-bold text-[var(--sev-critical)]">
+                    {i + 1}.
+                  </span>
+                  <span>{rec}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
         </div>
 
-        {/* TAB 1: Tactical Assessment */}
-        {activeTab === 'assessment' && (
-          <>
-            <div className={`ai-panel__status ${statusClass(analysis.status)}`}>
-              {analysis.status === 'CRITICAL' && 'ALERT CRITICAL: '}
-              {analysis.status === 'HIGH' && 'WARNING: '}
-              {analysis.status}
-            </div>
+        {/* Upfront Clean Copilot AI Chat */}
+        <div className="rounded-2xl bg-[var(--surface-2)] p-4 sm:p-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-2 text-xs font-bold text-[var(--text-primary)]">
+              <MessageSquare className="h-3.5 w-3.5 text-[var(--accent)]" />
+              Tanya Kopilot AI ({activeModel})
+            </span>
+            {copilotLatency && (
+              <span className="font-mono text-[10px] tabular-nums text-[var(--text-muted)]">
+                {copilotLatency}ms
+              </span>
+            )}
+          </div>
 
-            <div className="ai-panel__grid">
-              <div>
-                <div className="ai-panel__section-title">Telemetry Observations</div>
-                <ul className="ai-panel__list">
-                  {analysis.observations?.map((obs, i) => (
-                    <li key={i}>{obs}</li>
-                  ))}
-                </ul>
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {SUGGESTED_PROMPTS.slice(0, 3).map((promptText, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => {
+                  setQuestion(promptText);
+                  handleAskCopilot(promptText);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-full bg-[var(--surface-1)] px-3 py-1 text-left text-[11px] font-medium text-[var(--text-secondary)] shadow-2xs transition-colors hover:text-[var(--text-primary)]"
+              >
+                <Lightbulb className="h-3 w-3 shrink-0 text-[var(--sev-elevated)]" />
+                <span>{promptText}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="flex gap-2">
+            <input
+              type="text"
+              placeholder={`Tanyakan dampak, evakuasi, atau kondisi sensor ke ${activeProvider === 'bedrock' ? 'AWS Bedrock' : 'Gemini 2.5'}...`}
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAskCopilot()}
+              className="flex-1 rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] px-3.5 py-2.5 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent-border)]"
+            />
+            <button
+              type="button"
+              onClick={() => handleAskCopilot()}
+              disabled={copilotLoading}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--accent-strong)] px-4 py-2.5 text-xs font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              <Send className="h-3.5 w-3.5" />
+              <span>{copilotLoading ? 'Proses...' : 'Tanya'}</span>
+            </button>
+          </div>
+
+          {copilotLoading && (
+            <div className="mt-3 flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+              <span className="live-dot-pulse" />
+              <span>Mengkonsolidasikan telemetri live dengan {activeModel}...</span>
+            </div>
+          )}
+
+          {copilotReply && !copilotLoading && (
+            <div className="mt-3 rounded-xl bg-[var(--surface-1)] p-4 shadow-2xs">
+              <div className="mb-1.5 inline-flex items-center gap-1.5 font-mono text-[10px] font-bold text-[var(--accent)]">
+                <Bot className="h-3.5 w-3.5" /> JAWABAN KOPILOT
+              </div>
+              <div className="whitespace-pre-wrap text-xs leading-relaxed text-[var(--text-primary)]">
+                {copilotReply}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Toggleable Technical Details: Fault Dynamics, SOP & OODA Streaming Agent */}
+        <div className="border-t border-[var(--border-hairline)] pt-4">
+          <button
+            type="button"
+            onClick={() => setShowTechnicalDetails((prev) => !prev)}
+            className="inline-flex items-center gap-2 rounded-full bg-[var(--surface-2)] px-3.5 py-1.5 text-xs font-semibold text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+          >
+            {showTechnicalDetails ? (
+              <ChevronDown className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" />
+            )}
+            <span>
+              Detail Teknis Sesar, SOP Multi-Lembaga &amp; Log Agen OODA (Siklus #
+              {agentState?.total_cycles || 0})
+            </span>
+          </button>
+
+          {showTechnicalDetails && (
+            <div className="mt-4 space-y-5">
+              {/* Fault Dynamics & Tsunami Run-Up */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-xl bg-[var(--surface-2)] p-3">
+                  <div className="text-[10px] font-semibold text-[var(--text-muted)] uppercase">
+                    Mekanisme Sesar
+                  </div>
+                  <div className="mt-1 text-xs font-bold text-[var(--text-primary)]">
+                    {analysis.hazard_details?.fault_mechanism || 'Subduksi Interplate Megathrust'}
+                  </div>
+                </div>
+                <div className="rounded-xl bg-[var(--surface-2)] p-3">
+                  <div className="text-[10px] font-semibold text-[var(--text-muted)] uppercase">
+                    Coseismic Slip
+                  </div>
+                  <div className="mt-1 font-mono text-sm font-bold text-[var(--sev-high)]">
+                    {analysis.hazard_details?.estimated_coseismic_slip || '< 0.2 meter'}
+                  </div>
+                </div>
+                <div className="rounded-xl bg-[var(--surface-2)] p-3">
+                  <div className="text-[10px] font-semibold text-[var(--text-muted)] uppercase">
+                    Run-up Tsunami
+                  </div>
+                  <div className="mt-1 text-xs font-bold text-[var(--ocean-cyan)]">
+                    {analysis.hazard_details?.tsunami_runup_estimate || 'Tidak berpotensi tsunami'}
+                  </div>
+                </div>
+                <div className="rounded-xl bg-[var(--surface-2)] p-3">
+                  <div className="text-[10px] font-semibold text-[var(--text-muted)] uppercase">
+                    Jendela Evakuasi
+                  </div>
+                  <div className="mt-1 font-mono text-sm font-bold tabular-nums text-[var(--sev-critical)]">
+                    {analysis.hazard_details?.evacuation_window_min ?? 15} Menit
+                  </div>
+                </div>
               </div>
 
-              <div>
-                <div className="ai-panel__section-title">Immediate Tactical Actions</div>
-                <ol className="ai-panel__list ai-panel__list--numbered">
-                  {analysis.recommendations?.map((rec, i) => (
-                    <li key={i}>{rec}</li>
-                  ))}
-                </ol>
-              </div>
-            </div>
-
-            {/* Multi-Agency Action Matrix */}
-            {analysis.agency_actions && analysis.agency_actions.length > 0 && (
-              <div style={{ marginTop: '18px' }}>
-                <div className="ai-panel__section-title">Multi-Agency Action Matrix (SOP Kedaruratan)</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '10px', marginTop: '8px' }}>
+              {/* Multi-Agency SOP */}
+              {analysis.agency_actions && analysis.agency_actions.length > 0 && (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                   {analysis.agency_actions.map((act, i) => (
-                    <div key={i} style={{ background: 'rgba(15, 23, 42, 0.6)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '6px', padding: '10px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                        <span style={{ fontWeight: 800, fontSize: '12px', color: '#00f2ff' }}>{act.agency}</span>
-                        <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: `${priorityColor(act.priority)}22`, color: priorityColor(act.priority), border: `1px solid ${priorityColor(act.priority)}55` }}>
+                    <div key={i} className="rounded-xl bg-[var(--surface-2)] p-3.5">
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-[var(--text-primary)]">
+                          {act.agency}
+                        </span>
+                        <span
+                          className={`rounded-full px-2 py-0.5 font-mono text-[9px] font-bold ${priorityStyle(
+                            act.priority
+                          )}`}
+                        >
                           {act.priority}
                         </span>
                       </div>
-                      <div style={{ fontSize: '11px', color: '#cbd5e1', lineHeight: 1.4 }}>
+                      <p className="text-[11px] leading-relaxed text-[var(--text-secondary)]">
                         {act.action}
-                      </div>
+                      </p>
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
-          </>
-        )}
+              )}
 
-        {/* TAB 2: Rupture & Hazard Deep-Dive */}
-        {activeTab === 'hazard' && (
-          <div>
-            <div className="ai-panel__section-title">Seismological Rupture Dynamics & Tsunami Projection</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px', margin: '12px 0 18px 0' }}>
-              <div style={{ background: 'rgba(15, 23, 42, 0.7)', padding: '12px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                <div style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'uppercase' }}>Mekanisme Sesar</div>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: '#f8fafc', marginTop: '4px' }}>
-                  {analysis.hazard_details?.fault_mechanism || 'Subduction Megathrust Thrust'}
-                </div>
-              </div>
-
-              <div style={{ background: 'rgba(15, 23, 42, 0.7)', padding: '12px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                <div style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'uppercase' }}>Estimasi Coseismic Slip</div>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: '#ff9100', marginTop: '4px' }}>
-                  {analysis.hazard_details?.estimated_coseismic_slip || '4.8 - 7.2 meter'}
-                </div>
-              </div>
-
-              <div style={{ background: 'rgba(15, 23, 42, 0.7)', padding: '12px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                <div style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'uppercase' }}>Estimasi Runup Tsunami</div>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: '#00f2ff', marginTop: '4px' }}>
-                  {analysis.hazard_details?.tsunami_runup_estimate || '8 - 15 meter'}
-                </div>
-              </div>
-
-              <div style={{ background: 'rgba(15, 23, 42, 0.7)', padding: '12px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.08)' }}>
-                <div style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'uppercase' }}>Golden Evacuation Window</div>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: '#ff2a5f', marginTop: '4px' }}>
-                  {analysis.hazard_details?.evacuation_window_min || 18} Menit
-                </div>
-              </div>
-            </div>
-
-            <div style={{ background: 'rgba(15, 23, 42, 0.6)', padding: '14px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.06)' }}>
-              <div style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 700, marginBottom: '6px' }}>
-                AFTERSHOCK RISK ASSESSMENT & OMORI LAW PROJECTION:
-              </div>
-              <p style={{ fontSize: '12px', color: '#cbd5e1', lineHeight: 1.6, margin: 0 }}>
-                {analysis.hazard_details?.aftershock_risk || 'Risiko gempa susulan signifikan (M>6.0) tinggi dalam 48 jam ke depan di sepanjang zona robekan patahan subduksi.'}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* TAB 3: Interactive Tanya Copilot */}
-        {activeTab === 'copilot' && (
-          <div>
-            <div className="ai-panel__section-title">Interaksi Darurat dengan {activeModel}</div>
-            <p style={{ fontSize: '12px', color: '#94a3b8', margin: '4px 0 12px 0' }}>
-              Ajukan pertanyaan taktis terkait risiko tsunami, panduan evakuasi, atau dampak seismik secara instan:
-            </p>
-
-            {/* Suggested quick prompt chips */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>
-              {SUGGESTED_PROMPTS.map((promptText, i) => (
-                <button
-                  key={i}
-                  onClick={() => {
-                    setQuestion(promptText);
-                    handleAskCopilot(promptText);
-                  }}
-                  style={{
-                    background: 'rgba(255,255,255,0.04)',
-                    border: '1px solid rgba(255,255,255,0.12)',
-                    borderRadius: '16px',
-                    padding: '4px 10px',
-                    fontSize: '10.5px',
-                    color: '#e2e8f0',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.borderColor = '#00f2ff')}
-                  onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)')}
-                >
-                  💡 {promptText}
-                </button>
-              ))}
-            </div>
-
-            {/* Input form */}
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
-              <input
-                type="text"
-                placeholder={`Ketik pertanyaan untuk ${activeProvider === 'bedrock' ? 'Claude / Bedrock' : 'Gemini AI'}...`}
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleAskCopilot()}
-                style={{
-                  flex: 1,
-                  background: '#060a14',
-                  border: '1px solid rgba(0, 242, 255, 0.3)',
-                  borderRadius: '6px',
-                  padding: '8px 12px',
-                  color: '#fff',
-                  fontSize: '12px',
-                  outline: 'none',
-                }}
-              />
-              <button
-                onClick={() => handleAskCopilot()}
-                disabled={copilotLoading}
-                style={{
-                  background: activeProvider === 'bedrock' ? 'linear-gradient(135deg, #ff9100, #ff2a5f)' : '#ff2a5f',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '6px',
-                  padding: '8px 18px',
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  cursor: copilotLoading ? 'not-allowed' : 'pointer',
-                  opacity: copilotLoading ? 0.6 : 1,
-                }}
-              >
-                {copilotLoading ? 'ANALYZING...' : 'TANYA AI'}
-              </button>
-            </div>
-
-            {/* Reply card */}
-            {copilotLoading && (
-              <div style={{ padding: '14px', background: 'rgba(15, 23, 42, 0.7)', borderRadius: '6px', color: '#00f2ff', fontSize: '12px' }}>
-                <span className="live-dot-pulse"></span> Mengkonsolidasikan data telemetri streaming dengan {activeModel}...
-              </div>
-            )}
-
-            {copilotReply && !copilotLoading && (
-              <div style={{ background: 'rgba(15, 23, 42, 0.8)', border: '1px solid rgba(0, 242, 255, 0.25)', borderRadius: '6px', padding: '14px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', fontSize: '11px', color: '#00f2ff', fontWeight: 700 }}>
-                  <span>🤖 JAWABAN TAKTIS COPILOT:</span>
-                  {copilotLatency && <span style={{ color: '#94a3b8' }}>{copilotLatency}ms</span>}
-                </div>
-                <div style={{ fontSize: '12px', color: '#f8fafc', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
-                  {copilotReply}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* TAB 4: Streaming Data Agent */}
-        {activeTab === 'agent' && (
-          <div>
-            {/* Agent Live Telemetry Ribbon */}
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-              gap: '10px',
-              marginBottom: '16px',
-            }}>
-              <div style={{ background: 'rgba(15, 23, 42, 0.75)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', padding: '10px 14px' }}>
-                <div style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Status Siklus Agen</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
-                  <span style={{
-                    display: 'inline-block',
-                    width: '8px',
-                    height: '8px',
-                    borderRadius: '50%',
-                    background: agentState?.status === 'ACTION_DISPATCHED' ? '#ff2a5f' : '#10b981',
-                    boxShadow: '0 0 8px currentColor',
-                  }} />
-                  <span style={{ fontSize: '13px', fontWeight: 800, color: '#f8fafc' }}>
-                    {agentState?.status || 'MONITORING'}
+              {/* OODA Streaming Agent Log & Stream */}
+              <div className="rounded-2xl bg-[var(--surface-2)] p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-bold text-[var(--text-primary)]">
+                    <Cpu className="h-3.5 w-3.5 text-[var(--accent)]" />
+                    Memori Agen Streaming OODA ({agentState?.status || 'MONITORING'})
+                  </span>
+                  <span className="font-mono text-[10px] text-[var(--text-muted)]">
+                    Siklus #{agentState?.total_cycles || 0}
                   </span>
                 </div>
-              </div>
 
-              <div style={{ background: 'rgba(15, 23, 42, 0.75)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', padding: '10px 14px' }}>
-                <div style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Siklus OODA</div>
-                <div style={{ fontSize: '15px', fontWeight: 800, color: '#00f2ff', marginTop: '4px', fontFamily: 'monospace' }}>
-                  #{agentState?.total_cycles || 0}
-                </div>
-              </div>
-
-              <div style={{ background: 'rgba(15, 23, 42, 0.75)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', padding: '10px 14px' }}>
-                <div style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Tingkat Risiko Memori</div>
-                <div style={{
-                  fontSize: '13px',
-                  fontWeight: 800,
-                  marginTop: '4px',
-                  color: agentState?.current_risk === 'CRITICAL' ? '#ff2a5f' : agentState?.current_risk === 'HIGH' ? '#ff9100' : '#10b981',
-                }}>
-                  {agentState?.current_risk || 'NORMAL'}
-                </div>
-              </div>
-
-              <div style={{ background: 'rgba(15, 23, 42, 0.75)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', padding: '10px 14px' }}>
-                <div style={{ fontSize: '10px', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Mesin LLM Berjalan</div>
-                <div style={{ fontSize: '12px', fontWeight: 700, color: '#c084fc', marginTop: '4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {activeProvider === 'bedrock' ? '☁️ Bedrock (Claude 3.5)' : '♊ Gemini 2.5 Flash'}
-                </div>
-              </div>
-            </div>
-
-            {/* Split Sections: OODA Thought Stream + Tactical Actions */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '14px', marginBottom: '18px' }}>
-              {/* OODA Thought Stream */}
-              <div style={{ background: 'rgba(15, 23, 42, 0.65)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', padding: '14px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                  <span style={{ fontSize: '11px', fontWeight: 800, color: '#00f2ff', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
-                    🧠 Alur Berpikir OODA (Observe-Orient-Decide-Act)
-                  </span>
-                  <span style={{ fontSize: '9px', color: '#94a3b8' }}>Live Sliding Window</span>
-                </div>
-
-                <div style={{ maxHeight: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '4px' }}>
-                  {agentLiveThoughts.length === 0 ? (
-                    <div style={{ fontSize: '11px', color: '#64748b', fontStyle: 'italic', padding: '10px 0' }}>
-                      Menunggu pemicu telemetri streaming... Agen aktif mengamati Kafka topic gempa.seismic & flink output.
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl bg-[var(--surface-1)] p-3">
+                    <div className="mb-2 flex items-center gap-1.5 text-[11px] font-bold text-[var(--text-primary)]">
+                      <Brain className="h-3.5 w-3.5 text-[var(--accent)]" />
+                      Alur Penalaran
                     </div>
-                  ) : (
-                    agentLiveThoughts.slice(-10).reverse().map((th, i) => {
-                      const badge = phaseBadge(th.phase);
-                      return (
-                        <div key={i} style={{
-                          background: 'rgba(2, 6, 23, 0.7)',
-                          border: `1px solid ${badge.border}33`,
-                          borderLeft: `3px solid ${badge.border}`,
-                          borderRadius: '4px',
-                          padding: '8px 10px',
-                          fontSize: '11px',
-                        }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                            <span style={{
-                              fontSize: '9px',
-                              fontWeight: 800,
-                              padding: '1px 6px',
-                              borderRadius: '4px',
-                              background: badge.bg,
-                              color: badge.text,
-                              border: `1px solid ${badge.border}`,
-                            }}>
-                              {th.phase}
-                            </span>
-                            <span style={{ fontSize: '9px', color: '#64748b', fontFamily: 'monospace' }}>
-                              {new Date(th.timestamp).toLocaleTimeString()}
-                            </span>
-                          </div>
-                          <div style={{ color: '#e2e8f0', lineHeight: 1.4 }}>
-                            {th.message}
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-
-              {/* Autonomous Dispatched Directives */}
-              <div style={{ background: 'rgba(15, 23, 42, 0.65)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', padding: '14px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                  <span style={{ fontSize: '11px', fontWeight: 800, color: '#ff2a5f', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
-                    🚨 Direktif Kedaruratan Multi-Agency Otonom
-                  </span>
-                  <span style={{ fontSize: '9px', color: '#94a3b8' }}>Auto-Dispatched</span>
-                </div>
-
-                <div style={{ maxHeight: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '4px' }}>
-                  {agentLiveActions.length === 0 ? (
-                    <div style={{ fontSize: '11px', color: '#64748b', fontStyle: 'italic', padding: '10px 0' }}>
-                      Belum ada instruksi eskalasi otonom. Ambang batas pemicu otomatis: M≥7.0 atau Anomali Gelombang Tsunami &gt; 3.0m.
+                    <div className="flex max-h-[150px] flex-col gap-1.5 overflow-y-auto pr-1">
+                      {agentLiveThoughts.length === 0 ? (
+                        <p className="text-[11px] text-[var(--text-muted)]">Menunggu siklus OODA...</p>
+                      ) : (
+                        agentLiveThoughts
+                          .slice(-4)
+                          .reverse()
+                          .map((th, i) => {
+                            const style = phaseStyle(th.phase);
+                            return (
+                              <div
+                                key={i}
+                                className={`rounded-lg border-l-2 bg-[var(--surface-2)] p-2 text-[11px] ${style.borderLeft}`}
+                              >
+                                <div className="mb-0.5 flex items-center justify-between font-mono text-[9px]">
+                                  <span className="font-bold text-[var(--accent)]">{th.phase}</span>
+                                  <span className="text-[var(--text-muted)] tabular-nums">
+                                    {new Date(th.timestamp).toLocaleTimeString('id-ID')}
+                                  </span>
+                                </div>
+                                <p className="leading-snug text-[var(--text-secondary)]">{th.message}</p>
+                              </div>
+                            );
+                          })
+                      )}
                     </div>
-                  ) : (
-                    agentLiveActions.slice(-6).reverse().map((act, i) => (
-                      <div key={i} style={{
-                        background: 'rgba(2, 6, 23, 0.8)',
-                        border: '1px solid rgba(255, 42, 95, 0.3)',
-                        borderRadius: '6px',
-                        padding: '10px',
-                      }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                          <span style={{ fontWeight: 800, fontSize: '12px', color: '#00f2ff' }}>
-                            {act.agency} • {act.type}
-                          </span>
-                          <span style={{
-                            fontSize: '9px',
-                            fontWeight: 800,
-                            padding: '1px 6px',
-                            borderRadius: '4px',
-                            background: 'rgba(255, 42, 95, 0.2)',
-                            color: '#ff2a5f',
-                            border: '1px solid #ff2a5f',
-                          }}>
-                            {act.priority}
-                          </span>
-                        </div>
-                        <div style={{ fontSize: '10px', color: '#94a3b8', marginBottom: '4px' }}>
-                          📍 Target Zone: <strong style={{ color: '#f8fafc' }}>{act.target_zone}</strong>
-                        </div>
-                        <div style={{ fontSize: '11px', color: '#cbd5e1', lineHeight: 1.4 }}>
-                          {act.rationale}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Token-by-Token Streaming Copilot with Working Memory */}
-            <div style={{
-              background: 'rgba(15, 23, 42, 0.85)',
-              border: '1px solid rgba(0, 242, 255, 0.25)',
-              borderRadius: '8px',
-              padding: '16px',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-                <span style={{ fontSize: '12px', fontWeight: 800, color: '#00f2ff', textTransform: 'uppercase' }}>
-                  💬 Interaksi Streaming Chat dengan Agen Data ({activeProvider === 'bedrock' ? 'Bedrock Claude 3.5' : 'Gemini 2.5'})
-                </span>
-                <span style={{ fontSize: '10px', color: '#94a3b8' }}>
-                  Token-by-Token Live SSE
-                </span>
-              </div>
-
-              {/* Suggested quick prompt chips */}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>
-                {AGENT_SUGGESTED_PROMPTS.map((promptText, i) => (
-                  <button
-                    key={i}
-                    onClick={() => {
-                      setAgentQuestion(promptText);
-                      handleAskAgentStream(promptText);
-                    }}
-                    style={{
-                      background: 'rgba(255,255,255,0.04)',
-                      border: '1px solid rgba(255,255,255,0.12)',
-                      borderRadius: '16px',
-                      padding: '4px 10px',
-                      fontSize: '10.5px',
-                      color: '#e2e8f0',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s',
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.borderColor = '#00f2ff')}
-                    onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.12)')}
-                  >
-                    ⚡ {promptText}
-                  </button>
-                ))}
-              </div>
-
-              {/* Streaming Input Form */}
-              <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-                <input
-                  type="text"
-                  placeholder="Ketik pertanyaan untuk streaming agent (memori kerja aktif terinjeksi)..."
-                  value={agentQuestion}
-                  onChange={(e) => setAgentQuestion(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleAskAgentStream()}
-                  style={{
-                    flex: 1,
-                    background: '#060a14',
-                    border: '1px solid rgba(0, 242, 255, 0.35)',
-                    borderRadius: '6px',
-                    padding: '9px 14px',
-                    color: '#fff',
-                    fontSize: '12px',
-                    outline: 'none',
-                  }}
-                />
-                <button
-                  onClick={() => handleAskAgentStream()}
-                  disabled={agentStreaming}
-                  style={{
-                    background: 'linear-gradient(135deg, #00f2ff, #a855f7)',
-                    color: '#060a14',
-                    border: 'none',
-                    borderRadius: '6px',
-                    padding: '8px 20px',
-                    fontSize: '11px',
-                    fontWeight: 800,
-                    cursor: agentStreaming ? 'not-allowed' : 'pointer',
-                    opacity: agentStreaming ? 0.7 : 1,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                  }}
-                >
-                  {agentStreaming ? (
-                    <>
-                      <span className="live-dot-pulse" style={{ width: '6px', height: '6px' }} />
-                      <span>STREAMING...</span>
-                    </>
-                  ) : (
-                    <span>STREAM TANYA</span>
-                  )}
-                </button>
-              </div>
-
-              {/* Live Streaming Response Box */}
-              {(agentStreaming || agentStreamAnswer) && (
-                <div style={{
-                  background: 'rgba(2, 6, 23, 0.95)',
-                  border: '1px solid rgba(0, 242, 255, 0.3)',
-                  borderRadius: '6px',
-                  padding: '14px',
-                  marginTop: '10px',
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                    <span style={{ fontSize: '11px', fontWeight: 800, color: '#00f2ff' }}>
-                      🤖 RESPONS STREAMING AGEN DATA:
-                    </span>
-                    {agentStreaming && (
-                      <span style={{ fontSize: '10px', color: '#a855f7', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', background: '#a855f7', animation: 'pulse-dot 1s infinite' }} />
-                        Menerima token secara langsung...
-                      </span>
-                    )}
                   </div>
-                  <div style={{
-                    fontSize: '12.5px',
-                    color: '#f8fafc',
-                    lineHeight: 1.65,
-                    whiteSpace: 'pre-wrap',
-                    fontFamily: 'system-ui, -apple-system, sans-serif',
-                  }}>
+
+                  <div className="rounded-xl bg-[var(--surface-1)] p-3">
+                    <div className="mb-2 flex items-center gap-1.5 text-[11px] font-bold text-[var(--text-primary)]">
+                      <Activity className="h-3.5 w-3.5 text-[var(--sev-critical)]" />
+                      Direktif Otomatis
+                    </div>
+                    <div className="flex max-h-[150px] flex-col gap-1.5 overflow-y-auto pr-1">
+                      {agentLiveActions.length === 0 ? (
+                        <p className="text-[11px] text-[var(--text-muted)]">
+                          Tidak ada eskalasi kritis aktif.
+                        </p>
+                      ) : (
+                        agentLiveActions
+                          .slice(-4)
+                          .reverse()
+                          .map((act, i) => (
+                            <div key={i} className="rounded-lg bg-[var(--surface-2)] p-2 text-[11px]">
+                              <div className="flex items-center justify-between gap-1 font-bold text-[var(--text-primary)]">
+                                <span className="truncate">
+                                  {act.agency} · {act.type}
+                                </span>
+                                <span className="font-mono text-[9px] text-[var(--sev-critical)]">
+                                  {act.priority}
+                                </span>
+                              </div>
+                              <p className="mt-0.5 line-clamp-2 text-[10px] text-[var(--text-secondary)]">
+                                {act.target_zone}: {act.rationale}
+                              </p>
+                            </div>
+                          ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Tanyakan langsung ke stream memori Agen OODA..."
+                    value={agentQuestion}
+                    onChange={(e) => setAgentQuestion(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAskAgentStream()}
+                    className="flex-1 rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent-border)]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleAskAgentStream()}
+                    disabled={agentStreaming}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--accent-strong)] px-3.5 py-2 text-xs font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                    <span>{agentStreaming ? 'Stream...' : 'Stream'}</span>
+                  </button>
+                </div>
+
+                {(agentStreaming || agentStreamAnswer) && (
+                  <div className="mt-3 rounded-xl bg-[var(--surface-1)] p-3 text-xs leading-relaxed text-[var(--text-primary)] whitespace-pre-wrap">
                     {agentStreamAnswer}
                     {agentStreaming && (
-                      <span style={{ display: 'inline-block', width: '6px', height: '14px', background: '#00f2ff', marginLeft: '3px', verticalAlign: 'middle', animation: 'pulse-dot 0.8s infinite' }} />
+                      <span className="ml-1 inline-block h-3.5 w-1.5 animate-pulse bg-[var(--accent)] align-middle" />
                     )}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Explainability Accordion */}
         {analysis.contributing_factors && analysis.contributing_factors.length > 0 && (
-          <div style={{ marginTop: '14px' }}>
+          <div className="mt-4 border-t border-[var(--border-hairline)] pt-3">
             <button
-              className="explain-toggle"
+              type="button"
               onClick={() => setShowExplain(!showExplain)}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
             >
-              <span>{showExplain ? '▼' : '▶'}</span>
-              <span>Mengapa {activeProvider === 'bedrock' ? 'AWS Bedrock' : 'Gemini AI'} menetapkan tingkat risiko ini? (Explainability Factor)</span>
+              {showExplain ? (
+                <ChevronDown className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5" />
+              )}
+              <span>
+                Faktor Penentu Tingkat Risiko ({activeProvider === 'bedrock' ? 'AWS Bedrock' : 'Gemini AI'})
+              </span>
             </button>
 
             {showExplain && (
-              <div className="explain-content" style={{ marginTop: '8px' }}>
+              <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {analysis.contributing_factors.map((factor, i) => (
-                  <div key={i} className="explain-factor">
-                    <div>
-                      <div className="explain-factor__name">
-                        ✓ {factor.indicator}
-                      </div>
-                      <div className="explain-factor__change">
-                        {factor.value} — {factor.change}
-                      </div>
+                  <div
+                    key={i}
+                    className="rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-2)] p-2.5"
+                  >
+                    <div className="flex items-center justify-between text-xs font-semibold text-[var(--text-primary)]">
+                      <span className="inline-flex items-center gap-1.5">
+                        <CheckCircle2 className="h-3.5 w-3.5 text-[var(--sev-normal)]" />
+                        {factor.indicator}
+                      </span>
+                      <span className="font-mono text-[11px] tabular-nums text-[var(--accent)]">
+                        {Math.round((factor.significance || 0) * 100)}%
+                      </span>
                     </div>
-                    <div className="explain-factor__bar">
+                    <div className="mt-1 font-mono text-[11px] text-[var(--text-secondary)]">
+                      {factor.value} — {factor.change}
+                    </div>
+                    <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-[var(--surface-1)]">
                       <div
-                        className="explain-factor__bar-fill"
-                        style={{ width: `${factor.significance * 100}%` }}
+                        className="h-full rounded-full bg-[var(--accent)]"
+                        style={{ width: `${Math.min(100, (factor.significance || 0) * 100)}%` }}
                       />
                     </div>
                   </div>
@@ -975,8 +770,12 @@ export default function AIPanel({ analysis }: AIPanelProps) {
         )}
 
         {/* Disclaimer */}
-        <div className="ai-panel__disclaimer" style={{ marginTop: '16px' }}>
-          ⚠ {analysis.disclaimer || 'Real-time decision support based on streaming sensor telemetry. Not an official BMKG earthquake prediction.'}
+        <div className="mt-4 flex items-center gap-2 rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-2)] px-3 py-2 text-[11px] text-[var(--text-muted)]">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--sev-elevated)]" />
+          <span>
+            {analysis.disclaimer ||
+              'Sistem pendukung keputusan berbasis telemetri streaming; rujukan resmi tetap mengacu pada diseminasi BMKG.'}
+          </span>
         </div>
       </div>
     </div>

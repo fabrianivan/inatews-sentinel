@@ -120,12 +120,12 @@ export default function SeismogramAnalysisModal({
           maxHeight: isFullscreen ? '96vh' : '92vh',
           display: 'flex',
           flexDirection: 'column',
-          background: 'rgba(10, 14, 26, 0.98)',
-          border: '1px solid var(--border-medium)',
-          boxShadow: '0 24px 70px rgba(0, 0, 0, 0.95), 0 0 45px rgba(0, 242, 255, 0.18)',
+          background: 'var(--surface-1)',
+          border: '1px solid var(--border-strong)',
+          boxShadow: '0 24px 64px rgba(2, 6, 23, 0.55)',
           overflow: 'hidden',
           padding: 0,
-          transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+          transition: 'all 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
         }}
       >
         {/* Modal Header */}
@@ -134,9 +134,9 @@ export default function SeismogramAnalysisModal({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '14px 22px',
-            borderBottom: '1px solid var(--border-subtle)',
-            background: 'rgba(255, 255, 255, 0.02)',
+            padding: '14px 20px',
+            borderBottom: '1px solid var(--border-hairline)',
+            background: 'var(--surface-2)',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>

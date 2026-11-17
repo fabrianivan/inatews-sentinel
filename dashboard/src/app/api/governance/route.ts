@@ -1,26 +1,12 @@
 import { NextResponse } from 'next/server';
+import { proxyBackendJson } from '@/lib/backendProxy';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const candidateBases = [
-    process.env.INTERNAL_BACKEND_URL,
-    process.env.NEXT_PUBLIC_API_URL,
-    process.env.NEXT_PUBLIC_API_BASE,
-    'http://localhost:8080',
-    'http://localhost:8081',
-  ].filter(Boolean) as string[];
-
-  for (const base of candidateBases) {
-    try {
-      const res = await fetch(`${base}/api/governance`, {
-        signal: AbortSignal.timeout(1500),
-        cache: 'no-store',
-      });
-      if (res.ok) {
-        return NextResponse.json(await res.json());
-      }
-    } catch {
-      // try next
-    }
+  const proxied = await proxyBackendJson<Record<string, unknown>>('/api/governance');
+  if (proxied) {
+    return NextResponse.json(proxied);
   }
 
   return NextResponse.json({

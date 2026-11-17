@@ -1,0 +1,116 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { proxyBackendStream } from '@/lib/backendProxy';
+import {
+  AI_PROVIDER_COOKIE,
+  generateHybridCopilotReply,
+  normalizeAIProvider,
+  type TelemetryPromptContext,
+} from '@/lib/aiContext';
+import { fetchLiveTelemetrySnapshot } from '@/lib/telemetry';
+
+export const dynamic = 'force-dynamic';
+
+export async function POST(req: NextRequest) {
+  let body: {
+    question?: string;
+    prompt?: string;
+    query?: string;
+    message?: string;
+    context?: TelemetryPromptContext;
+  } = {};
+
+  try {
+    body = await req.json();
+  } catch {
+    // ignore malformed json
+  }
+
+  const rawQuestion = String(
+    body.question || body.prompt || body.query || body.message || ''
+  ).trim();
+
+  if (!rawQuestion) {
+    return NextResponse.json({ error: 'question is required' }, { status: 400 });
+  }
+
+  const proxied = await proxyBackendStream(
+    '/api/agent/chat/stream',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: rawQuestion }),
+    },
+    2200,
+    req.signal
+  );
+
+  if (proxied?.body) {
+    return new Response(proxied.body, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+      },
+    });
+  }
+
+  const provider = normalizeAIProvider(
+    body.context?.provider ||
+      req.cookies.get(AI_PROVIDER_COOKIE)?.value ||
+      process.env.AI_PROVIDER
+  );
+  const snapshot = await fetchLiveTelemetrySnapshot();
+  const reply = await generateHybridCopilotReply({
+    question: rawQuestion,
+    kind: 'agent',
+    provider,
+    context: body.context,
+    snapshot,
+  });
+
+  const tokens = reply.answer.match(/\S+\s*/g) || [reply.answer];
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        for (const token of tokens) {
+          if (req.signal.aborted) break;
+          controller.enqueue(
+            encoder.encode(`event: token\ndata: ${JSON.stringify({ token })}\n\n`)
+          );
+          await new Promise((resolve) => setTimeout(resolve, 14));
+        }
+
+        if (!req.signal.aborted) {
+          const donePayload = JSON.stringify({
+            answer: reply.answer,
+            model: reply.model,
+            latency_ms: reply.latencyMs,
+            timestamp: new Date().toISOString(),
+          });
+          controller.enqueue(encoder.encode(`event: done\ndata: ${donePayload}\n\n`));
+        }
+      } catch {
+        // ignore closed client
+      } finally {
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
+      }
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  });
+}

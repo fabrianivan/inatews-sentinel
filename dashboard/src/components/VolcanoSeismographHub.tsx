@@ -1,14 +1,34 @@
 'use client';
 
 import { useState, useMemo, useEffect, useRef } from 'react';
+import {
+  Activity,
+  Clock,
+  Image as ImageIcon,
+  MapPin,
+  Microscope,
+  Mountain,
+  RotateCcw,
+  ScrollText,
+  X,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
 import type { VolcanoEruption } from '@/lib/types';
-import { INDONESIAN_VOLCANOES, findVolcanoLocation } from '@/lib/volcanoData';
+import {
+  INDONESIAN_VOLCANOES,
+  buildVolcanoInspectionReport,
+  findVolcanoLocation,
+  getVolcanoReports,
+} from '@/lib/volcanoData';
+import VolcanoChip from './VolcanoChip';
 
 interface VolcanoSeismographHubProps {
   volcanoes: VolcanoEruption[];
   selectedVolcano?: string | null;
   onSelectVolcano?: (name: string) => void;
   onInspectSeismogram?: (volcano: VolcanoEruption) => void;
+  theme?: 'dark' | 'light';
 }
 
 export default function VolcanoSeismographHub({
@@ -16,13 +36,17 @@ export default function VolcanoSeismographHub({
   selectedVolcano = 'Anak Krakatau',
   onSelectVolcano,
   onInspectSeismogram,
+  theme = 'dark',
 }: VolcanoSeismographHubProps) {
   const [activeVolcano, setActiveVolcano] = useState<string>(selectedVolcano || 'Anak Krakatau');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [previewZoom, setPreviewZoom] = useState<number>(1);
   const [previewPan, setPreviewPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isPreviewDragging, setIsPreviewDragging] = useState<boolean>(false);
-  const [previewDragStart, setPreviewDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [previewDragStart, setPreviewDragStart] = useState<{ x: number; y: number }>({
+    x: 0,
+    y: 0,
+  });
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
   const pointsRef = useRef<number[]>([]);
@@ -33,63 +57,38 @@ export default function VolcanoSeismographHub({
     setPreviewPan({ x: 0, y: 0 });
   };
 
-  // Keep internal selection synced with external prop
   useEffect(() => {
     if (selectedVolcano) {
       setActiveVolcano(selectedVolcano);
     }
   }, [selectedVolcano]);
 
-  // Find geo metadata
-  const geo = useMemo(() => {
-    return findVolcanoLocation(activeVolcano) || INDONESIAN_VOLCANOES[0];
-  }, [activeVolcano]);
+  const geo = useMemo(
+    () => findVolcanoLocation(activeVolcano) || INDONESIAN_VOLCANOES[0],
+    [activeVolcano]
+  );
 
-  // Find all historical reports for this specific volcano
-  const volcanoHistory = useMemo(() => {
-    const cleanName = geo.name.toLowerCase().trim();
-    return volcanoes.filter((e) => {
-      const cleanErup = e.volcano_name.toLowerCase().trim().replace(/^g\.\s*/, '');
-      return cleanName.includes(cleanErup) || cleanErup.includes(cleanName);
-    });
-  }, [geo, volcanoes]);
+  const volcanoHistory = useMemo(() => getVolcanoReports(geo, volcanoes), [geo, volcanoes]);
 
-  // Latest report is first in list (or fallback generated for active volcano)
-  const latestReport = useMemo(() => {
-    if (volcanoHistory.length > 0) return volcanoHistory[0];
-    return {
-      id: `latest-${geo.name.toLowerCase().replace(/\s+/g, '-')}`,
-      volcano_name: geo.name,
-      time: 'Pemantauan Aktif',
-      date: new Date().toLocaleDateString('id-ID'),
-      description: `Pos Pengamatan Gunung Api ${geo.pgaStation} merekam aktivitas tremor vulkanik kontinu dalam batas normal-waspada.`,
-      amplitude: '15 mm',
-      duration: '45 detik',
-      visual_ash: 'Asap kawah putih intensitas tipis hingga sedang',
-      author: 'Petugas Pos Pengamatan PVMBG',
-      alert_level: geo.defaultLevel,
-      recommendation: 'Masyarakat dilarang mendekati kawah aktif sesuai radius rekomendasi PVMBG.',
-      timestamp: new Date().toISOString(),
-    } as VolcanoEruption;
-  }, [volcanoHistory, geo]);
+  const latestReport = useMemo(
+    () => buildVolcanoInspectionReport(geo, volcanoes),
+    [geo, volcanoes]
+  );
 
   const alertLevel = latestReport.alert_level || geo.defaultLevel;
   const isAwas = alertLevel.includes('AWAS');
   const isSiaga = alertLevel.includes('SIAGA');
   const isWaspada = alertLevel.includes('WASPADA');
-
   const ampNum = parseFloat(latestReport.amplitude.replace(/[^0-9.]/g, '')) || 20;
 
-  // Animate live waveform drum for this volcano
-  const configRef = useRef({ ampNum, isAwas, isSiaga });
+  const configRef = useRef({ ampNum, isAwas, isSiaga, isWaspada, theme });
   useEffect(() => {
-    configRef.current = { ampNum, isAwas, isSiaga };
-  }, [ampNum, isAwas, isSiaga]);
+    configRef.current = { ampNum, isAwas, isSiaga, isWaspada, theme };
+  }, [ampNum, isAwas, isSiaga, isWaspada, theme]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
@@ -98,7 +97,7 @@ export default function VolcanoSeismographHub({
 
     const handleResize = () => {
       if (!canvas || !canvas.parentElement) return;
-      width = canvas.width = canvas.parentElement.clientWidth;
+      width = canvas.width = canvas.parentElement.clientWidth || 400;
     };
     window.addEventListener('resize', handleResize);
 
@@ -111,10 +110,15 @@ export default function VolcanoSeismographHub({
 
     const render = () => {
       tick++;
-      const { ampNum: amp, isAwas: awas, isSiaga: siaga } = configRef.current;
+      const {
+        ampNum: amp,
+        isAwas: awas,
+        isSiaga: siaga,
+        isWaspada: waspada,
+        theme: currentTheme,
+      } = configRef.current;
       const midY = height / 2;
 
-      // Volcanic tremor & harmonic resonance
       const ampScale = Math.min(42, Math.max(8, amp * 0.75));
       const tremor = Math.sin(tick * 0.42) * (ampScale * 0.35);
       const fluidResonance = Math.sin(tick * 0.88) * (ampScale * 0.28);
@@ -122,15 +126,18 @@ export default function VolcanoSeismographHub({
       const burstProb = awas ? 0.22 : siaga ? 0.12 : 0.05;
       const burst = Math.random() < burstProb ? (Math.random() - 0.5) * ampScale * 1.6 : 0;
 
-      const offset = Math.max(-height / 2 + 8, Math.min(height / 2 - 8, tremor + fluidResonance + lp + burst));
+      const offset = Math.max(
+        -height / 2 + 8,
+        Math.min(height / 2 - 8, tremor + fluidResonance + lp + burst)
+      );
       pointsRef.current.push(midY + offset);
       if (pointsRef.current.length > maxPoints) pointsRef.current.shift();
 
-      ctx.fillStyle = '#060a14';
+      const isLight = currentTheme === 'light';
+      ctx.fillStyle = isLight ? '#f4f8fc' : '#050914';
       ctx.fillRect(0, 0, width, height);
 
-      // Grid
-      ctx.strokeStyle = 'rgba(0, 242, 255, 0.06)';
+      ctx.strokeStyle = isLight ? 'rgba(15, 23, 42, 0.06)' : 'rgba(148, 163, 184, 0.08)';
       ctx.lineWidth = 1;
       for (let x = 0; x < width; x += 40) {
         ctx.beginPath();
@@ -145,8 +152,7 @@ export default function VolcanoSeismographHub({
         ctx.stroke();
       }
 
-      // Center reference line
-      ctx.strokeStyle = 'rgba(0, 242, 255, 0.2)';
+      ctx.strokeStyle = isLight ? 'rgba(2, 132, 199, 0.24)' : 'rgba(34, 211, 238, 0.2)';
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
       ctx.moveTo(0, midY);
@@ -154,12 +160,17 @@ export default function VolcanoSeismographHub({
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Stylus line
-      const strokeColor = awas ? '#ff2a5f' : siaga ? '#ff5722' : isWaspada ? '#ff9800' : '#00f2ff';
-      ctx.shadowColor = strokeColor;
-      ctx.shadowBlur = 8;
+      const strokeColor = awas
+        ? '#fb7185'
+        : siaga
+        ? '#fb923c'
+        : waspada
+        ? '#fbbf24'
+        : isLight
+        ? '#0284c7'
+        : '#22d3ee';
       ctx.strokeStyle = strokeColor;
-      ctx.lineWidth = 2.0;
+      ctx.lineWidth = 1.8;
       ctx.beginPath();
 
       const dx = width / (pointsRef.current.length - 1);
@@ -170,20 +181,17 @@ export default function VolcanoSeismographHub({
         else ctx.lineTo(x, y);
       }
       ctx.stroke();
-      ctx.shadowBlur = 0;
 
-      // Stylus needle
       const lastIdx = pointsRef.current.length - 1;
       ctx.fillStyle = strokeColor;
       ctx.beginPath();
-      ctx.arc(lastIdx * dx, pointsRef.current[lastIdx], 4, 0, Math.PI * 2);
+      ctx.arc(lastIdx * dx, pointsRef.current[lastIdx], 3.5, 0, Math.PI * 2);
       ctx.fill();
 
       animationRef.current = requestAnimationFrame(render);
     };
 
     animationRef.current = requestAnimationFrame(render);
-
     return () => {
       window.removeEventListener('resize', handleResize);
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
@@ -195,361 +203,246 @@ export default function VolcanoSeismographHub({
     onSelectVolcano?.(name);
   };
 
+  /** Opens the PVMBG analysis for one volcano and makes it the active one in the hub. */
+  const handleAnalyzeVolcano = (name: string) => {
+    const location = findVolcanoLocation(name);
+    if (!location) return;
+    handleSelectVolcano(location.name);
+    onInspectSeismogram?.(buildVolcanoInspectionReport(location, volcanoes));
+  };
+
+  const levelBadgeClass = isAwas
+    ? 'border-[var(--sev-critical-border)] bg-[var(--sev-critical-bg)] text-[var(--sev-critical)]'
+    : isSiaga
+    ? 'border-[var(--sev-high-border)] bg-[var(--sev-high-bg)] text-[var(--sev-high)]'
+    : 'border-[var(--sev-elevated-border)] bg-[var(--sev-elevated-bg)] text-[var(--sev-elevated)]';
+
   return (
-    <div className="card volcano-seismo-hub" style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      {/* Header with Title and Volcano Selection Chips */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ fontSize: '24px' }}>🌋</span>
+    <div className="matte-card flex flex-col gap-5 p-5 sm:p-6">
+      {/* Header + Volcano Filter Strip */}
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[var(--sev-high-border)] bg-[var(--sev-high-bg)] text-[var(--sev-high)]">
+              <Mountain className="h-5 w-5" />
+            </div>
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <h2 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
-                  Pusat Seismograf & Citra Vulkanik Per Gunung
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base font-bold text-[var(--text-primary)]">
+                  Pusat Seismograf &amp; Citra Vulkanik PVMBG
                 </h2>
-                <span className="card__badge card__badge--live">MAGMA PVMBG ESDM</span>
+                <span className="rounded border border-[var(--sev-normal-border)] bg-[var(--sev-normal-bg)] px-2 py-0.5 font-mono text-[10px] font-semibold text-[var(--sev-normal)]">
+                  MAGMA ESDM LIVE
+                </span>
               </div>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0' }}>
-                Monitoring gelombang seismograf terkini dan riwayat dokumentasi seismogram per pos pengamatan gunung api aktif
+              <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
+                Pemantauan gelombang seismograf pos pengamatan gunung api aktif dan arsip laporan erupsi PVMBG.
               </p>
             </div>
           </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>PILIH GUNUNG API:</span>
-          </div>
         </div>
 
-        {/* Volcano Selection Pills */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflowX: 'auto', paddingBottom: '4px' }}>
-          {INDONESIAN_VOLCANOES.map((v) => {
-            const isSelected = activeVolcano.toLowerCase().includes(v.name.toLowerCase()) || v.name.toLowerCase().includes(activeVolcano.toLowerCase());
-            const reportCount = volcanoes.filter((e) => {
-              const clean = e.volcano_name.toLowerCase().replace(/^g\.\s*/, '');
-              return v.name.toLowerCase().includes(clean) || clean.includes(v.name.toLowerCase());
-            }).length;
-
-            return (
-              <button
-                key={v.name}
-                onClick={() => handleSelectVolcano(v.name)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '6px 12px',
-                  borderRadius: '20px',
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  whiteSpace: 'nowrap',
-                  cursor: 'pointer',
-                  background: isSelected
-                    ? 'linear-gradient(135deg, rgba(255, 87, 34, 0.25), rgba(255, 42, 95, 0.15))'
-                    : 'rgba(255, 255, 255, 0.04)',
-                  border: isSelected ? '1px solid #ff5722' : '1px solid var(--border-subtle)',
-                  color: isSelected ? '#ff9800' : 'var(--text-secondary)',
-                  boxShadow: isSelected ? '0 0 12px rgba(255, 87, 34, 0.3)' : 'none',
-                  transition: 'all 0.2s ease',
-                }}
-              >
-                <span>🌋 G. {v.name}</span>
-                {reportCount > 0 && (
-                  <span
-                    style={{
-                      background: isSelected ? '#ff2a5f' : 'rgba(255, 42, 95, 0.3)',
-                      color: '#fff',
-                      fontSize: '9px',
-                      padding: '1px 5px',
-                      borderRadius: '10px',
-                    }}
-                  >
-                    {reportCount} Erupsi
-                  </span>
-                )}
-              </button>
-            );
-          })}
+        {/* Every volcano carries its own Analisis PVMBG action */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+          {INDONESIAN_VOLCANOES.map((v) => (
+            <VolcanoChip
+              key={v.name}
+              name={v.name}
+              selected={geo.name === v.name}
+              reportCount={getVolcanoReports(v, volcanoes).length}
+              onSelect={() => handleSelectVolcano(v.name)}
+              onAnalyze={() => handleAnalyzeVolcano(v.name)}
+            />
+          ))}
         </div>
       </div>
 
-      {/* Main Grid: Section Terkini (Left: Waveform + Right: Latest Image & Parameters) */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1.2fr 1fr',
-          gap: '20px',
-          background: 'rgba(255, 255, 255, 0.02)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: '10px',
-          padding: '18px',
-        }}
-        className="volcano-hub-main-grid"
-      >
-        {/* Left Column: Live Telemetry & Waveform Drum */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span className="live-dot-pulse"></span>
-              <span style={{ fontSize: '12px', fontWeight: 800, color: '#00f2ff', letterSpacing: '0.04em' }}>
-                REKAMAN SEISMOGRAF TERKINI (LIVE DRUM)
-              </span>
-            </div>
-            <span
-              className={`volcano-card__level-badge ${
-                isAwas
-                  ? 'volcano-card__level-badge--awas'
-                  : isSiaga
-                  ? 'volcano-card__level-badge--siaga'
-                  : 'volcano-card__level-badge--waspada'
-              }`}
-              style={{ fontSize: '10px', padding: '2px 8px' }}
-            >
+      {/* Main Split: Live Waveform Drum + Latest PVMBG Seismogram */}
+      <div className="grid grid-cols-1 gap-4 rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-2)] p-4 lg:grid-cols-[1.2fr_1fr]">
+        {/* Left: Waveform Drum */}
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-1.5 font-mono text-xs font-bold text-[var(--accent)]">
+              <Activity className="h-3.5 w-3.5" />
+              REKAMAN SEISMOGRAF TERKINI
+            </span>
+            <span className={`rounded border px-2 py-0.5 font-mono text-[10px] font-bold ${levelBadgeClass}`}>
               {alertLevel}
             </span>
           </div>
 
-          {/* Pos & Instrument Details */}
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: '1.5' }}>
-            📍 <strong style={{ color: 'var(--text-primary)' }}>{geo.pgaStation}</strong> • Wilayah: <strong>{geo.province}</strong><br />
-            Koordinat: <span style={{ fontFamily: 'monospace', color: '#00f2ff' }}>{geo.pos[0].toFixed(3)}°S, {geo.pos[1].toFixed(3)}°E</span> • Elevasi: <strong>{geo.elevation} mdpl</strong> • Sensor: <strong>{geo.sensorType}</strong>
-          </div>
-
-          {/* Canvas Drum */}
-          <div style={{ borderRadius: '6px', overflow: 'hidden', border: '1px solid rgba(0, 242, 255, 0.2)', position: 'relative' }}>
-            <canvas ref={canvasRef} style={{ width: '100%', height: '130px', display: 'block' }} />
-            <div style={{ position: 'absolute', bottom: 6, left: 10, fontSize: '9px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>
-              KOMPONEN Z • 100 Hz REAL-TIME STREAM • AMPLITUDO: {latestReport.amplitude}
+          <div className="text-xs text-[var(--text-secondary)]">
+            <div className="inline-flex items-center gap-1 font-semibold text-[var(--text-primary)]">
+              <MapPin className="h-3.5 w-3.5 text-[var(--accent)]" />
+              {geo.pgaStation} · {geo.province}
+            </div>
+            <div className="mt-0.5 font-mono text-[11px] tabular-nums text-[var(--text-muted)]">
+              {geo.pos[0].toFixed(3)}°S, {geo.pos[1].toFixed(3)}°E · Elevasi {geo.elevation} mdpl · {geo.sensorType}
             </div>
           </div>
 
-          {/* Live Parameter Metric Chips */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
-            <div style={{ background: 'rgba(0,0,0,0.35)', padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--border-subtle)' }}>
-              <span style={{ fontSize: '9px', color: 'var(--text-muted)', display: 'block' }}>AMPLITUDO MAKS</span>
-              <span style={{ fontSize: '15px', fontWeight: 800, color: '#ff2a5f' }}>{latestReport.amplitude}</span>
+          <div className="relative overflow-hidden rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-1)]">
+            <canvas ref={canvasRef} className="block h-[130px] w-full" />
+            <div className="border-t border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-1 font-mono text-[10px] text-[var(--text-muted)]">
+              KOMPONEN Z · 100 Hz REAL-TIME · AMP: {latestReport.amplitude}
             </div>
-            <div style={{ background: 'rgba(0,0,0,0.35)', padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--border-subtle)' }}>
-              <span style={{ fontSize: '9px', color: 'var(--text-muted)', display: 'block' }}>DURASI GEMPA</span>
-              <span style={{ fontSize: '15px', fontWeight: 800, color: '#ff9800' }}>{latestReport.duration}</span>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            <div className="rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-2">
+              <div className="text-[10px] text-[var(--text-muted)]">Amplitudo Maks</div>
+              <div className="font-mono text-sm font-bold text-[var(--sev-critical)]">
+                {latestReport.amplitude}
+              </div>
             </div>
-            <div style={{ background: 'rgba(0,0,0,0.35)', padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--border-subtle)' }}>
-              <span style={{ fontSize: '9px', color: 'var(--text-muted)', display: 'block' }}>WAKTU TERAKHIR</span>
-              <span style={{ fontSize: '11px', fontWeight: 700, color: '#00f2ff' }}>{latestReport.time}</span>
+            <div className="rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-2">
+              <div className="text-[10px] text-[var(--text-muted)]">Durasi Gempa</div>
+              <div className="font-mono text-sm font-bold text-[var(--sev-high)]">
+                {latestReport.duration}
+              </div>
+            </div>
+            <div className="rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-2">
+              <div className="text-[10px] text-[var(--text-muted)]">Waktu Terkini</div>
+              <div className="truncate font-mono text-xs font-bold text-[var(--accent)]">
+                {latestReport.time}
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Right Column: Latest Seismogram Image & Physical Inspection */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: '12px', fontWeight: 800, color: '#ff9800', letterSpacing: '0.04em' }}>
-              📸 CITRA SEISMOGRAM TERKINI PVMBG
+        {/* Right: Image & Inspection */}
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-1.5 font-mono text-xs font-bold text-[var(--sev-high)]">
+              <ImageIcon className="h-3.5 w-3.5" />
+              CITRA SEISMOGRAM PVMBG
             </span>
             <button
+              type="button"
               onClick={() => onInspectSeismogram?.(latestReport)}
-              style={{
-                fontSize: '11px',
-                fontWeight: 700,
-                color: '#c084fc',
-                background: 'rgba(168, 85, 247, 0.15)',
-                border: '1px solid rgba(168, 85, 247, 0.4)',
-                padding: '4px 10px',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-              }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-[var(--accent-border)] bg-[var(--accent-muted)] px-2.5 py-1 text-[11px] font-semibold text-[var(--accent)] hover:bg-[var(--surface-1)]"
             >
-              <span>🔬</span>
-              <span>Analisis Lengkap</span>
+              <Microscope className="h-3.5 w-3.5" />
+              <span>Analisis PVMBG</span>
             </button>
           </div>
 
-          {/* Image Display Box */}
           <div
-            style={{
-              position: 'relative',
-              borderRadius: '8px',
-              overflow: 'hidden',
-              background: '#060a14',
-              border: '1px solid var(--border-medium)',
-              height: '180px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-            }}
             onClick={() => {
               if (latestReport.image_url) openPreview(latestReport.image_url);
               else onInspectSeismogram?.(latestReport);
             }}
             title="Klik untuk memperbesar gambar seismogram"
+            className="relative flex h-[180px] cursor-pointer items-center justify-center overflow-hidden rounded-lg border border-[var(--border-strong)] bg-[var(--surface-1)]"
           >
             {latestReport.image_url ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={latestReport.image_url}
                 alt={`Seismogram ${geo.name}`}
-                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                className="h-full w-full object-contain"
               />
             ) : (
-              <div style={{ textAlign: 'center', padding: '16px', color: 'var(--text-muted)' }}>
-                <span style={{ fontSize: '28px', display: 'block', marginBottom: '6px' }}>📈</span>
-                <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+              <div className="p-4 text-center">
+                <Activity className="mx-auto mb-2 h-6 w-6 text-[var(--accent)]" />
+                <div className="text-xs font-bold text-[var(--text-primary)]">
                   Rekaman Sinyal Erupsi G. {geo.name}
-                </span>
-                <div style={{ fontSize: '10px', marginTop: '4px' }}>
-                  Amplitudo: {latestReport.amplitude} • Durasi: {latestReport.duration}
                 </div>
-                <div style={{ fontSize: '10px', color: '#00f2ff', marginTop: '6px' }}>
-                  Klik untuk membuka rekonstruksi instrumen & analisis AI ↗
+                <div className="mt-1 font-mono text-[11px] text-[var(--text-secondary)]">
+                  Amplitudo {latestReport.amplitude} · Durasi {latestReport.duration}
+                </div>
+                <div className="mt-2 text-[11px] font-semibold text-[var(--accent)]">
+                  Klik untuk membuka rekonstruksi &amp; analisis fisis
                 </div>
               </div>
             )}
-            <div
-              style={{
-                position: 'absolute',
-                bottom: 0,
-                insetInline: 0,
-                background: 'linear-gradient(to top, rgba(0,0,0,0.85), transparent)',
-                padding: '8px 12px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                fontSize: '10px',
-              }}
-            >
-              <span style={{ color: '#fff', fontWeight: 700 }}>🔍 Klik untuk Perbesar</span>
-              <span style={{ color: '#94a3b8' }}>{latestReport.date}</span>
-            </div>
           </div>
 
-          {/* Quick Volcanic Note */}
-          <div style={{ background: 'rgba(0,0,0,0.25)', padding: '8px 12px', borderRadius: '6px', fontSize: '11px', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-            <strong style={{ color: '#ff9800' }}>Pengamatan Kawah:</strong> {latestReport.visual_ash}<br />
-            <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>Petugas Pos: {latestReport.author}</span>
+          <div className="rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-1)] p-2.5 text-xs text-[var(--text-secondary)]">
+            <div>
+              <strong className="text-[var(--sev-high)]">Pengamatan Kawah:</strong>{' '}
+              {latestReport.visual_ash}
+            </div>
+            <div className="mt-0.5 text-[11px] text-[var(--text-muted)]">
+              Petugas Pos: {latestReport.author} · {latestReport.date}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Section Riwayat (History of Seismograms per Volcano) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '16px' }}>📜</span>
-            <span style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>
-              Riwayat Seismograf & Catatan Erupsi: G. {geo.name}
-            </span>
-            <span style={{ fontSize: '11px', background: 'rgba(255,255,255,0.08)', color: 'var(--text-muted)', padding: '2px 8px', borderRadius: '10px' }}>
-              {volcanoHistory.length > 0 ? `${volcanoHistory.length} Kejadian Tercatat` : 'Monitoring Rutin'}
+      {/* History Grid */}
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <ScrollText className="h-4 w-4 text-[var(--accent)]" />
+            <h3 className="text-xs font-bold text-[var(--text-primary)]">
+              Riwayat Erupsi &amp; Seismogram: G. {geo.name}
+            </h3>
+            <span className="rounded bg-[var(--surface-2)] px-2 py-0.5 font-mono text-[10px] font-semibold text-[var(--text-secondary)]">
+              {volcanoHistory.length > 0
+                ? `${volcanoHistory.length} Kejadian`
+                : 'Monitoring Rutin'}
             </span>
           </div>
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+          <span className="text-[11px] text-[var(--text-muted)]">
             Sumber: MAGMA Indonesia PVMBG
           </span>
         </div>
 
-        {/* History Grid */}
         {volcanoHistory.length === 0 ? (
-          <div
-            style={{
-              padding: '24px',
-              textAlign: 'center',
-              background: 'rgba(0,0,0,0.2)',
-              borderRadius: '8px',
-              border: '1px dashed var(--border-subtle)',
-              color: 'var(--text-muted)',
-              fontSize: '12px',
-            }}
-          >
-            Belum ada letusan besar baru yang dicatat pos pengamatan hari ini untuk G. {geo.name}. Seismograf saat ini merekam getaran tremor latar belakang (background micro-tremors).
+          <div className="rounded-lg border border-dashed border-[var(--border-hairline)] bg-[var(--surface-2)] p-6 text-center text-xs text-[var(--text-muted)]">
+            Belum ada letusan besar baru tercatat hari ini untuk G. {geo.name}. Seismograf merekam micro-tremor latar belakang.
           </div>
         ) : (
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-              gap: '12px',
-            }}
-          >
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {volcanoHistory.map((item, idx) => (
               <div
                 key={item.id || idx}
-                style={{
-                  background: 'rgba(255, 255, 255, 0.03)',
-                  border: '1px solid var(--border-subtle)',
-                  borderRadius: '8px',
-                  padding: '12px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '8px',
-                  transition: 'border-color 0.2s ease',
-                }}
+                className="flex flex-col gap-2 rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-2)] p-3"
               >
-                {/* Top Info */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '12px', fontWeight: 800, color: '#00f2ff' }}>
-                    ⏱ {item.time}
+                <div className="flex items-center justify-between font-mono text-[11px]">
+                  <span className="inline-flex items-center gap-1 font-bold text-[var(--accent)]">
+                    <Clock className="h-3 w-3" />
+                    {item.time}
                   </span>
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                    {item.date}
-                  </span>
+                  <span className="text-[var(--text-muted)]">{item.date}</span>
                 </div>
 
-                {/* Thumbnail Image if available */}
                 {item.image_url && (
                   <div
-                    style={{
-                      height: '100px',
-                      borderRadius: '6px',
-                      overflow: 'hidden',
-                      background: '#060a14',
-                      border: '1px solid var(--border-subtle)',
-                      cursor: 'pointer',
-                    }}
+                    onClick={() => openPreview(item.image_url!)}
+                    className="h-24 cursor-pointer overflow-hidden rounded border border-[var(--border-hairline)] bg-[var(--surface-1)]"
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={item.image_url}
                       alt={`Seismogram ${item.time}`}
-                      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                      className="h-full w-full object-contain"
                       loading="lazy"
                     />
                   </div>
                 )}
 
-                {/* Metrics Row */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', background: 'rgba(0,0,0,0.3)', padding: '6px 8px', borderRadius: '4px' }}>
-                  <span>Amp: <strong style={{ color: '#ff2a5f' }}>{item.amplitude}</strong></span>
-                  <span>Durasi: <strong style={{ color: '#ff9800' }}>{item.duration}</strong></span>
+                <div className="flex items-center justify-between rounded border border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-1 font-mono text-[11px]">
+                  <span>
+                    Amp: <strong className="text-[var(--sev-critical)]">{item.amplitude}</strong>
+                  </span>
+                  <span>
+                    Durasi: <strong className="text-[var(--sev-high)]">{item.duration}</strong>
+                  </span>
                 </div>
 
-                <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: 0, lineHeight: '1.4', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                <p className="line-clamp-2 text-[11px] leading-relaxed text-[var(--text-secondary)]">
                   {item.description}
                 </p>
 
-                {/* Action button */}
                 <button
+                  type="button"
                   onClick={() => onInspectSeismogram?.(item)}
-                  style={{
-                    marginTop: 'auto',
-                    padding: '5px 8px',
-                    fontSize: '10px',
-                    fontWeight: 700,
-                    background: 'rgba(168, 85, 247, 0.1)',
-                    border: '1px solid rgba(168, 85, 247, 0.3)',
-                    color: '#c084fc',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '4px',
-                  }}
+                  className="mt-auto inline-flex items-center justify-center gap-1.5 rounded-md border border-[var(--accent-border)] bg-[var(--accent-muted)] px-2.5 py-1.5 text-[11px] font-semibold text-[var(--accent)] hover:bg-[var(--surface-1)]"
                 >
-                  <span>🔬</span>
-                  <span>Analisis Sinyal & Citra Ini</span>
+                  <Microscope className="h-3.5 w-3.5" />
+                  <span>Analisis Sinyal &amp; Citra</span>
                 </button>
               </div>
             ))}
@@ -561,102 +454,62 @@ export default function VolcanoSeismographHub({
       {previewImage && (
         <div className="volcano-lightbox" onClick={() => setPreviewImage(null)}>
           <div
-            className="volcano-lightbox__content"
             onClick={(e) => e.stopPropagation()}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              maxWidth: '92vw',
-              maxHeight: '92vh',
-              overflow: 'hidden',
-              position: 'relative',
-            }}
+            className="flex max-h-[92vh] max-w-[92vw] flex-col items-center gap-3 overflow-hidden"
           >
-            {/* Zoom Controls Toolbar */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '6px 12px',
-                background: 'rgba(6, 10, 20, 0.9)',
-                borderRadius: '6px',
-                border: '1px solid var(--border-subtle)',
-                marginBottom: '10px',
-                zIndex: 10,
-              }}
-            >
-              <span style={{ fontSize: '11px', fontWeight: 700, color: '#00f2ff' }}>🔍 Zoom:</span>
+            <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-1)] px-3 py-1.5 shadow-md">
               <button
+                type="button"
                 onClick={() => setPreviewZoom((z) => Math.max(0.75, Number((z - 0.25).toFixed(2))))}
-                style={{
-                  padding: '3px 8px',
-                  borderRadius: '4px',
-                  background: 'rgba(255,255,255,0.1)',
-                  color: '#fff',
-                  border: '1px solid var(--border-subtle)',
-                  cursor: 'pointer',
-                  fontWeight: 800,
-                }}
+                className="inline-flex h-7 w-7 items-center justify-center rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] text-[var(--text-primary)]"
               >
-                −
+                <ZoomOut className="h-3.5 w-3.5" />
               </button>
               {[1, 1.5, 2, 2.5].map((lvl) => (
                 <button
                   key={lvl}
+                  type="button"
                   onClick={() => {
                     setPreviewZoom(lvl);
                     if (lvl === 1) setPreviewPan({ x: 0, y: 0 });
                   }}
-                  style={{
-                    padding: '3px 8px',
-                    borderRadius: '4px',
-                    background: previewZoom === lvl ? 'rgba(0,242,255,0.2)' : 'rgba(255,255,255,0.05)',
-                    color: previewZoom === lvl ? '#00f2ff' : 'var(--text-secondary)',
-                    border: `1px solid ${previewZoom === lvl ? '#00f2ff' : 'var(--border-subtle)'}`,
-                    cursor: 'pointer',
-                    fontSize: '11px',
-                    fontWeight: 700,
-                  }}
+                  className={`rounded border px-2 py-1 font-mono text-[11px] font-bold ${
+                    previewZoom === lvl
+                      ? 'border-[var(--accent-border)] bg-[var(--accent-muted)] text-[var(--accent)]'
+                      : 'border-[var(--border-hairline)] bg-[var(--surface-2)] text-[var(--text-secondary)]'
+                  }`}
                 >
                   {lvl}x
                 </button>
               ))}
               <button
+                type="button"
                 onClick={() => setPreviewZoom((z) => Math.min(3.5, Number((z + 0.25).toFixed(2))))}
-                style={{
-                  padding: '3px 8px',
-                  borderRadius: '4px',
-                  background: 'rgba(255,255,255,0.1)',
-                  color: '#fff',
-                  border: '1px solid var(--border-subtle)',
-                  cursor: 'pointer',
-                  fontWeight: 800,
-                }}
+                className="inline-flex h-7 w-7 items-center justify-center rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] text-[var(--text-primary)]"
               >
-                +
+                <ZoomIn className="h-3.5 w-3.5" />
               </button>
               <button
+                type="button"
                 onClick={() => {
                   setPreviewZoom(1);
                   setPreviewPan({ x: 0, y: 0 });
                 }}
-                style={{
-                  padding: '3px 8px',
-                  borderRadius: '4px',
-                  background: 'rgba(255,255,255,0.05)',
-                  color: 'var(--text-muted)',
-                  border: '1px solid var(--border-subtle)',
-                  cursor: 'pointer',
-                  fontSize: '10px',
-                }}
+                className="inline-flex items-center gap-1 rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2 py-1 text-[11px] font-semibold text-[var(--text-secondary)]"
               >
-                ⟲ Reset
+                <RotateCcw className="h-3 w-3" />
+                <span>Reset</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewImage(null)}
+                className="inline-flex items-center gap-1 rounded border border-[var(--sev-critical-border)] bg-[var(--sev-critical-bg)] px-2.5 py-1 text-[11px] font-bold text-[var(--sev-critical)]"
+              >
+                <X className="h-3.5 w-3.5" />
+                <span>Tutup</span>
               </button>
             </div>
 
-            {/* Draggable Pan Image Container */}
             <div
               onWheel={(e) => {
                 e.preventDefault();
@@ -666,21 +519,22 @@ export default function VolcanoSeismographHub({
               onMouseDown={(e) => {
                 if (previewZoom <= 1) return;
                 setIsPreviewDragging(true);
-                setPreviewDragStart({ x: e.clientX - previewPan.x, y: e.clientY - previewPan.y });
+                setPreviewDragStart({
+                  x: e.clientX - previewPan.x,
+                  y: e.clientY - previewPan.y,
+                });
               }}
               onMouseMove={(e) => {
                 if (!isPreviewDragging || previewZoom <= 1) return;
-                setPreviewPan({ x: e.clientX - previewDragStart.x, y: e.clientY - previewDragStart.y });
+                setPreviewPan({
+                  x: e.clientX - previewDragStart.x,
+                  y: e.clientY - previewDragStart.y,
+                });
               }}
               onMouseUp={() => setIsPreviewDragging(false)}
               onMouseLeave={() => setIsPreviewDragging(false)}
+              className="flex max-h-[78vh] w-full items-center justify-center overflow-hidden rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-1)]"
               style={{
-                width: '100%',
-                maxHeight: '78vh',
-                overflow: 'hidden',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
                 cursor: previewZoom > 1 ? (isPreviewDragging ? 'grabbing' : 'grab') : 'default',
               }}
             >
@@ -688,22 +542,15 @@ export default function VolcanoSeismographHub({
               <img
                 src={previewImage}
                 alt="Seismogram PVMBG"
-                className="volcano-lightbox__img"
                 style={{
                   transform: `translate(${previewPan.x}px, ${previewPan.y}px) scale(${previewZoom})`,
                   transition: isPreviewDragging ? 'none' : 'transform 0.15s ease',
                   userSelect: 'none',
                   pointerEvents: 'none',
                 }}
+                className="max-h-[76vh] max-w-full object-contain"
               />
             </div>
-
-            <button
-              className="volcano-lightbox__close-btn"
-              onClick={() => setPreviewImage(null)}
-            >
-              ✕ Tutup Preview
-            </button>
           </div>
         </div>
       )}

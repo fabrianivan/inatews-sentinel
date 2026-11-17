@@ -1,36 +1,37 @@
 import { NextResponse } from 'next/server';
+import type { SystemStatus } from '@/lib/types';
+import { proxyBackendJson } from '@/lib/backendProxy';
+import {
+  computeDynamicIntensityAndStatus,
+  fetchOpenMeteoWeatherSummary,
+  fetchRealtimeEarthquakesData,
+  fetchRealtimeOceanData,
+} from '@/lib/telemetry';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const candidateBases = [
-    process.env.INTERNAL_BACKEND_URL,
-    process.env.NEXT_PUBLIC_API_URL,
-    process.env.NEXT_PUBLIC_API_BASE,
-    'http://localhost:8080',
-    'http://localhost:8081',
-  ].filter(Boolean) as string[];
-
-  for (const base of candidateBases) {
-    try {
-      const res = await fetch(`${base}/api/status`, {
-        signal: AbortSignal.timeout(1500),
-        cache: 'no-store',
-      });
-      if (res.ok) {
-        return NextResponse.json(await res.json());
-      }
-    } catch {
-      // try next
-    }
+  const proxied = await proxyBackendJson<SystemStatus>('/api/status');
+  if (proxied && typeof proxied.seismic_intensity === 'number') {
+    return NextResponse.json(proxied);
   }
 
+  const [earthquakes, ocean, weather] = await Promise.all([
+    fetchRealtimeEarthquakesData(),
+    fetchRealtimeOceanData(),
+    fetchOpenMeteoWeatherSummary(),
+  ]);
+
+  const { activityIndex, status } = computeDynamicIntensityAndStatus({
+    earthquakes,
+    ocean,
+    weather,
+  });
+
   return NextResponse.json({
-    seismic_intensity: 35.0,
-    ocean_status: 'IOC UNESCO LIVE',
-    weather_status: 'OPEN-METEO ONLINE',
-    infra_status: 'OPERATIONAL',
-    active_alerts: 0,
-    risk_level: 'NORMAL',
-    trend_direction: 'LIVE STREAM ACTIVE',
-    last_update: new Date().toISOString(),
+    ...status,
+    activity_index: activityIndex,
+    ocean_stations_count: ocean.count,
+    weather_summary: weather,
   });
 }

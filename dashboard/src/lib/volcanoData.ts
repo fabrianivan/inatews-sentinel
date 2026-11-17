@@ -1,3 +1,5 @@
+import type { VolcanoEruption } from './types';
+
 export interface VolcanoLocation {
   name: string;
   aliases: string[];
@@ -177,6 +179,55 @@ export const INDONESIAN_VOLCANOES: VolcanoLocation[] = [
     defaultLevel: 'LEVEL I (NORMAL)',
   },
 ];
+
+/** Strips the "G. " prefix MAGMA uses so feed names compare against catalogue names. */
+function normalizeVolcanoName(name: string): string {
+  return name.toLowerCase().trim().replace(/^g\.\s*/, '');
+}
+
+/** MAGMA PVMBG reports that belong to a catalogued volcano, in feed order (newest first). */
+export function getVolcanoReports(
+  volcano: VolcanoLocation,
+  reports: VolcanoEruption[]
+): VolcanoEruption[] {
+  const catalogueName = volcano.name.toLowerCase();
+  return reports.filter((report) => {
+    const feedName = normalizeVolcanoName(report.volcano_name);
+    return (
+      feedName.length > 0 &&
+      (catalogueName.includes(feedName) || feedName.includes(catalogueName))
+    );
+  });
+}
+
+/**
+ * The record handed to the PVMBG analysis modal for a volcano: its newest MAGMA
+ * report when the feed has one, otherwise a routine-monitoring record built from
+ * the observation-post catalogue — so every volcano can be analysed, not only the
+ * ones that erupted recently.
+ */
+export function buildVolcanoInspectionReport(
+  volcano: VolcanoLocation,
+  reports: VolcanoEruption[]
+): VolcanoEruption {
+  const latest = getVolcanoReports(volcano, reports)[0];
+  if (latest) return latest;
+
+  return {
+    id: `routine-${volcano.name.toLowerCase().replace(/\s+/g, '-')}`,
+    volcano_name: volcano.name,
+    time: 'Pemantauan Rutin',
+    date: new Date().toLocaleDateString('id-ID'),
+    description: `${volcano.pgaStation} merekam tremor vulkanik latar belakang. Belum ada laporan erupsi baru dari MAGMA PVMBG untuk G. ${volcano.name}.`,
+    amplitude: '15 mm',
+    duration: '45 detik',
+    visual_ash: 'Asap kawah putih intensitas tipis hingga sedang',
+    author: 'Petugas Pos Pengamatan PVMBG',
+    alert_level: volcano.defaultLevel,
+    recommendation: 'Masyarakat dilarang mendekati kawah aktif sesuai radius rekomendasi PVMBG.',
+    timestamp: new Date().toISOString(),
+  };
+}
 
 export function findVolcanoLocation(name: string): VolcanoLocation | null {
   if (!name) return null;

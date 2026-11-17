@@ -123,39 +123,60 @@ export function useMultiSSE(endpoint: string) {
   return { events, connected };
 }
 
+async function fetchWithLocalFallback<T>(path: string, init?: RequestInit): Promise<T> {
+  if (API_BASE) {
+    try {
+      const res = await fetch(`${API_BASE}${path}`, init);
+      if (res.ok) {
+        return (await res.json()) as T;
+      }
+    } catch {
+      // fall back to local Next.js API route handler
+    }
+  }
+
+  const localRes = await fetch(path, init);
+  if (!localRes.ok) {
+    throw new Error(`Request failed: ${localRes.status}`);
+  }
+  return (await localRes.json()) as T;
+}
+
 export async function triggerSimulation(typeOrPath: string) {
   const path = typeOrPath.startsWith('/')
     ? typeOrPath
     : `/api/simulate/${typeOrPath}`;
-  const res = await fetch(`${API_BASE}${path}`, { method: 'POST' });
-  return res.json();
+  return fetchWithLocalFallback(path, { method: 'POST' });
+}
+
+export async function toggleBackendMode(mode: 'real' | 'drill') {
+  return fetchWithLocalFallback<{ status: string; mode: string }>('/api/mode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  });
 }
 
 export async function fetchStatus(): Promise<unknown> {
-  const res = await fetch(`${API_BASE}/api/status`);
-  return res.json();
+  return fetchWithLocalFallback('/api/status');
 }
 
 export async function fetchGovernance(): Promise<unknown> {
-  const res = await fetch(`${API_BASE}/api/governance`);
-  return res.json();
+  return fetchWithLocalFallback('/api/governance');
 }
 
 export async function fetchAIProvider(): Promise<{ active: string; model: string; available: string[] }> {
-  const res = await fetch(`${API_BASE}/api/ai/provider`);
-  return res.json();
+  return fetchWithLocalFallback('/api/ai/provider');
 }
 
 export async function switchAIProvider(provider: string): Promise<{ status: string; active: string; model: string }> {
-  const res = await fetch(`${API_BASE}/api/ai/provider`, {
+  return fetchWithLocalFallback('/api/ai/provider', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ provider }),
   });
-  return res.json();
 }
 
 export async function fetchAgentState(): Promise<unknown> {
-  const res = await fetch(`${API_BASE}/api/agent/state`);
-  return res.json();
+  return fetchWithLocalFallback('/api/agent/state');
 }

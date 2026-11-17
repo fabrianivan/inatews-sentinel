@@ -1,6 +1,12 @@
 'use client';
 
-import type { BMKGGempaDetail, ActivityIndex, SystemStatus, AIAnalysis } from '@/lib/types';
+import { Activity, Bot, Gauge, Waves } from 'lucide-react';
+import type {
+  ActivityIndex,
+  AIAnalysis,
+  BMKGGempaDetail,
+  SystemStatus,
+} from '@/lib/types';
 
 interface TacticalRibbonProps {
   latestQuake: BMKGGempaDetail | null;
@@ -9,6 +15,7 @@ interface TacticalRibbonProps {
   aiAnalysis: AIAnalysis | null;
   stationCount?: number;
   tideCount?: number;
+  variant?: 'hud' | 'grid';
 }
 
 export default function TacticalRibbon({
@@ -16,172 +23,143 @@ export default function TacticalRibbon({
   activityIndex,
   status,
   aiAnalysis,
-  stationCount = 12,
-  tideCount = 34,
+  tideCount = 20,
+  variant = 'hud',
 }: TacticalRibbonProps) {
   const intensity = activityIndex?.overall_percentage ?? status?.seismic_intensity ?? 15.0;
   const mag = latestQuake?.Magnitude ? parseFloat(latestQuake.Magnitude) : 0;
   const depth = latestQuake?.Kedalaman || '10 km';
   const wilayah = latestQuake?.Wilayah || 'Wilayah Perairan Indonesia';
   const tsunamiPotensi = latestQuake?.Potensi || 'Tidak berpotensi tsunami';
-  const isTsunamiThreat = tsunamiPotensi.toLowerCase().includes('berpotensi tsunami') && !tsunamiPotensi.toLowerCase().includes('tidak');
+  const isTsunamiThreat =
+    tsunamiPotensi.toLowerCase().includes('berpotensi tsunami') &&
+    !tsunamiPotensi.toLowerCase().includes('tidak');
 
-  const isBedrock = aiAnalysis?.model_used?.toLowerCase().includes('claude') ||
+  const isBedrock =
+    aiAnalysis?.model_used?.toLowerCase().includes('claude') ||
     aiAnalysis?.model_used?.toLowerCase().includes('bedrock') ||
     false;
 
-  return (
-    <div className="tactical-ribbon">
-      {/* CARD 1: Latest BMKG Earthquake */}
-      <div className={`ribbon-card ribbon-card--quake ${isTsunamiThreat ? 'ribbon-card--threat' : ''}`}>
-        <div className="ribbon-card__header">
-          <span className="ribbon-card__tag">
-            <span className="live-dot-pulse" style={{ width: '6px', height: '6px' }} />
-            BMKG TEWS AUTOGEMPA
-          </span>
-          <span className="ribbon-card__time">{latestQuake?.Jam || 'LIVE'}</span>
-        </div>
-        <div className="ribbon-card__body">
-          <div className="ribbon-card__mag-wrap">
-            <div className={`ribbon-card__mag-badge ${mag >= 7.0 ? 'ribbon-card__mag-badge--critical' : mag >= 5.0 ? 'ribbon-card__mag-badge--high' : 'ribbon-card__mag-badge--normal'}`}>
-              M{mag > 0 ? mag.toFixed(1) : '—'}
-            </div>
-            <div className="ribbon-card__depth-wrap">
-              <span className="ribbon-card__depth">Kedalaman {depth}</span>
-              <span className="ribbon-card__coords">{latestQuake?.Coordinates || 'Indonesia'}</span>
-            </div>
-          </div>
-          <div className="ribbon-card__location" title={wilayah}>
-            📍 {wilayah}
-          </div>
-          {isTsunamiThreat ? (
-            <div className="ribbon-card__advisory ribbon-card__advisory--danger">
-              🚨 {tsunamiPotensi}
-            </div>
-          ) : (
-            <div className="ribbon-card__footer-meta" style={{ color: '#10b981' }}>
-              ✓ {tsunamiPotensi}
-            </div>
-          )}
-        </div>
-      </div>
+  const isCriticalIntensity = intensity >= 70 || isTsunamiThreat;
+  const riskLabel = status?.risk_level || 'NORMAL';
 
-      {/* CARD 2: National Seismic Intensity (MMI) */}
-      <div className="ribbon-card">
-        <div className="ribbon-card__header">
-          <span className="ribbon-card__tag">📊 FLINK STREAM CEP</span>
-          <span className="ribbon-card__badge ribbon-card__badge--cyan">1-MIN TUMBLE</span>
-        </div>
-        <div className="ribbon-card__body">
-          <div className="ribbon-card__stat-row">
-            <span className="ribbon-card__stat-val" style={{
-              color: intensity > 60 ? '#ef4444' : intensity > 35 ? '#f59e0b' : '#10b981',
-              fontFamily: "'JetBrains Mono', monospace",
-            }}>
-              {intensity.toFixed(1)}%
+  if (variant === 'hud') {
+    return (
+      <div className="pointer-events-none flex flex-wrap items-center gap-2">
+        {/* Pill 1: Gempa Terkini */}
+        <div
+          className={`glass-hud pointer-events-auto flex items-center gap-2 rounded-full px-3 py-1.5 ${
+            mag >= 6.5 || isTsunamiThreat ? 'border-[var(--sev-critical-border)]' : ''
+          }`}
+        >
+          <Activity
+            className={`h-3.5 w-3.5 shrink-0 ${
+              mag >= 6.5 || isTsunamiThreat
+                ? 'text-[var(--sev-critical)]'
+                : mag >= 5.0
+                  ? 'text-[var(--sev-high)]'
+                  : 'text-[var(--accent)]'
+            }`}
+          />
+          <div className="flex items-baseline gap-1.5 text-[11px]">
+            <span className="font-mono font-extrabold tabular-nums text-[var(--text-primary)]">
+              {mag > 0 ? `M${mag.toFixed(1)}` : '—'}
             </span>
-            <span className="ribbon-card__stat-unit">MMI INDEX</span>
-          </div>
-          <div className="ribbon-card__subtext">
-            <span>Trend: <strong>{activityIndex?.trend_direction || status?.trend_direction || 'NOMINAL'}</strong></span>
-          </div>
-          <div className="ribbon-card__bar-track">
-            <div
-              className="ribbon-card__bar-fill"
-              style={{
-                width: `${Math.min(100, Math.max(5, intensity))}%`,
-                background: intensity > 60 ? 'linear-gradient(90deg, #f59e0b, #ef4444)' : 'linear-gradient(90deg, #10b981, #06b6d4)',
-              }}
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* CARD 3: IOC UNESCO Sea Level & InaTEWS */}
-      <div className="ribbon-card">
-        <div className="ribbon-card__header">
-          <span className="ribbon-card__tag">🌊 IOC UNESCO RADAR</span>
-          <span className="ribbon-card__badge ribbon-card__badge--blue">{tideCount} STASIUN</span>
-        </div>
-        <div className="ribbon-card__body">
-          <div className="ribbon-card__stat-row">
-            <span className="ribbon-card__stat-val" style={{
-              color: status?.ocean_status?.includes('TSUNAMI') ? '#ff2a5f' : '#06b6d4',
-              fontFamily: "'JetBrains Mono', monospace",
-            }}>
-              {status?.ocean_status?.includes('TSUNAMI') ? 'ANOMALI' : 'NOMINAL'}
+            <span className="max-w-[140px] truncate text-[var(--text-secondary)]" title={wilayah}>
+              {wilayah}
             </span>
-            <span className="ribbon-card__stat-unit">DART BUOY</span>
-          </div>
-          <div className="ribbon-card__subtext">
-            <span>InaTEWS Buoys: <strong style={{ color: '#10b981' }}>100% ONLINE</strong></span>
-          </div>
-          <div className="ribbon-card__footer-meta">
-            Muka laut pesisir: <strong>±0.04m (Stabil)</strong>
-          </div>
-        </div>
-      </div>
-
-      {/* CARD 4: BMKG Broadband Network */}
-      <div className="ribbon-card">
-        <div className="ribbon-card__header">
-          <span className="ribbon-card__tag">📡 BMKG SEISMOMETER</span>
-          <span className="ribbon-card__badge ribbon-card__badge--green">{stationCount} AKTIF</span>
-        </div>
-        <div className="ribbon-card__body">
-          <div className="ribbon-card__stat-row">
-            <span className="ribbon-card__stat-val" style={{ color: '#34d399', fontFamily: "'JetBrains Mono', monospace" }}>
-              ONLINE
+            <span className="hidden font-mono text-[10px] text-[var(--text-muted)] xl:inline">
+              · {depth}
             </span>
-            <span className="ribbon-card__stat-unit">PGA &lt; 0.005g</span>
-          </div>
-          <div className="ribbon-card__subtext">
-            <span>LEM • JATS • CBJI • YOGI • PLAI</span>
-          </div>
-          <div className="ribbon-card__footer-meta">
-            Kualitas Sinyal: <strong style={{ color: '#34d399' }}>99.8% (Nominal)</strong>
           </div>
         </div>
-      </div>
 
-      {/* CARD 5: AI Intelligence Status (Gemini / Bedrock) */}
-      <div className="ribbon-card ribbon-card--ai">
-        <div className="ribbon-card__header">
-          <span className="ribbon-card__tag">
-            {isBedrock ? '☁️ AWS BEDROCK AI' : '⚡ GOOGLE GEMINI AI'}
-          </span>
-          <span className={`ribbon-card__badge ${isBedrock ? 'ribbon-card__badge--bedrock' : 'ribbon-card__badge--purple'}`}>
-            {isBedrock ? 'CLAUDE 3.5' : '2.5 FLASH'}
-          </span>
-        </div>
-        <div className="ribbon-card__body">
-          <div className="ribbon-card__stat-row">
+        {/* Pill 2: Indeks MMI */}
+        <div className="glass-hud pointer-events-auto flex items-center gap-2 rounded-full px-3 py-1.5">
+          <Gauge
+            className={`h-3.5 w-3.5 shrink-0 ${
+              isCriticalIntensity ? 'text-[var(--sev-critical)]' : 'text-[var(--sev-normal)]'
+            }`}
+          />
+          <div className="flex items-baseline gap-1.5 text-[11px]">
+            <span className="text-[var(--text-muted)]">MMI</span>
             <span
-              className="ribbon-card__stat-val"
-              style={{
-                color:
-                  aiAnalysis?.status === 'CRITICAL'
-                    ? '#ef4444'
-                    : aiAnalysis?.status === 'HIGH'
-                    ? '#f59e0b'
-                    : '#10b981',
-                fontFamily: "'JetBrains Mono', monospace",
-              }}
+              className={`font-mono font-bold tabular-nums ${
+                isCriticalIntensity ? 'text-[var(--sev-critical)]' : 'text-[var(--text-primary)]'
+              }`}
             >
-              {aiAnalysis?.status || 'NORMAL'}
+              {intensity.toFixed(0)}%
             </span>
-            <span className="ribbon-card__stat-unit">
-              Conf: {Math.round((aiAnalysis?.confidence ?? 0.96) * 100)}%
+            <span className="font-mono text-[9px] font-bold text-[var(--accent)]">{riskLabel}</span>
+          </div>
+        </div>
+
+        {/* Pill 3: Laut IOC */}
+        <div className="glass-hud pointer-events-auto hidden items-center gap-2 rounded-full px-3 py-1.5 sm:flex">
+          <Waves className="h-3.5 w-3.5 shrink-0 text-[var(--ocean-cyan)]" />
+          <div className="flex items-baseline gap-1.5 text-[11px]">
+            <span className="font-mono font-semibold tabular-nums text-[var(--text-primary)]">
+              {tideCount} Pasut IOC
             </span>
           </div>
-          <div className="ribbon-card__subtext" title={aiAnalysis?.assessment || 'Monitoring aktif seluruh koridor subduksi'}>
-            {aiAnalysis?.assessment
-              ? aiAnalysis.assessment.slice(0, 52) + '...'
-              : 'Monitoring aktif seluruh koridor subduksi'}
+        </div>
+
+        {/* Pill 4: AI Engine */}
+        <div className="glass-hud pointer-events-auto hidden items-center gap-2 rounded-full px-3 py-1.5 xl:flex">
+          <Bot className="h-3.5 w-3.5 shrink-0 text-[var(--satellite-purple)]" />
+          <div className="flex items-baseline gap-1.5 text-[11px]">
+            <span className="font-semibold text-[var(--text-primary)]">
+              {isBedrock ? 'Bedrock Claude' : 'Gemini 2.5'}
+            </span>
+            <span className="font-mono text-[10px] tabular-nums text-[var(--text-muted)]">
+              {Math.round((aiAnalysis?.confidence || 0.9) * 100)}%
+            </span>
           </div>
-          <div className="ribbon-card__footer-meta" style={{ color: '#94a3b8' }}>
-            Latency: <strong>{aiAnalysis?.latency_ms || 280}ms</strong>
-          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="matte-card grid grid-cols-2 divide-x divide-y divide-[var(--border-hairline)] sm:grid-cols-4 sm:divide-y-0">
+      <div className="p-4">
+        <div className="text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+          Gempa Terkini
+        </div>
+        <div className="font-display mt-1 text-2xl font-bold text-[var(--text-primary)] tabular-nums">
+          {mag > 0 ? `M${mag.toFixed(1)}` : '—'}
+        </div>
+        <div className="mt-0.5 truncate text-[11px] text-[var(--text-secondary)]">{wilayah}</div>
+      </div>
+      <div className="p-4">
+        <div className="text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+          Intensitas MMI
+        </div>
+        <div className="font-display mt-1 text-2xl font-bold text-[var(--accent)] tabular-nums">
+          {intensity.toFixed(1)}%
+        </div>
+        <div className="mt-0.5 font-mono text-[11px] text-[var(--text-secondary)]">{riskLabel}</div>
+      </div>
+      <div className="p-4">
+        <div className="text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+          Stasiun IOC
+        </div>
+        <div className="font-display mt-1 text-2xl font-bold text-[var(--text-primary)] tabular-nums">
+          {tideCount} Pasut
+        </div>
+        <div className="mt-0.5 truncate text-[11px] text-[var(--text-secondary)]">
+          {status?.ocean_status || 'IOC UNESCO LIVE'}
+        </div>
+      </div>
+      <div className="p-4">
+        <div className="text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+          AI Decision Support
+        </div>
+        <div className="font-display mt-1 truncate text-xl font-bold text-[var(--text-primary)]">
+          {isBedrock ? 'Bedrock Claude' : 'Gemini 2.5'}
+        </div>
+        <div className="mt-0.5 font-mono text-[11px] text-[var(--accent)]">
+          {aiAnalysis?.status || 'ADVISORY'}
         </div>
       </div>
     </div>

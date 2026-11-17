@@ -1,62 +1,65 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { proxyBackendJson } from '@/lib/backendProxy';
+import {
+  AI_PROVIDER_COOKIE,
+  getProviderModelLabel,
+  normalizeAIProvider,
+} from '@/lib/aiContext';
 
-let currentProvider = 'gemini';
+export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const candidateBases = [
-    process.env.INTERNAL_BACKEND_URL,
-    process.env.NEXT_PUBLIC_API_URL,
-    process.env.NEXT_PUBLIC_API_BASE,
-    'http://localhost:8080',
-    'http://localhost:8081',
-  ].filter(Boolean) as string[];
-
-  for (const base of candidateBases) {
-    try {
-      const res = await fetch(`${base}/api/ai/provider`, {
-        signal: AbortSignal.timeout(1500),
-        cache: 'no-store',
-      });
-      if (res.ok) {
-        return NextResponse.json(await res.json());
-      }
-    } catch {
-      // try next
-    }
+export async function GET(req: NextRequest) {
+  const proxied = await proxyBackendJson<{
+    active: string;
+    model: string;
+    available?: string[];
+  }>('/api/ai/provider');
+  if (proxied && proxied.active) {
+    return NextResponse.json(proxied);
   }
 
-  const model =
-    currentProvider === 'bedrock'
-      ? 'Anthropic Claude 3.5 Sonnet (AWS Bedrock)'
-      : 'Google Gemini 2.5 Flash';
+  const cookieVal = req.cookies.get(AI_PROVIDER_COOKIE)?.value;
+  const active = normalizeAIProvider(cookieVal || process.env.AI_PROVIDER);
 
   return NextResponse.json({
-    active: currentProvider,
-    model,
+    active,
+    model: getProviderModelLabel(active),
     available: ['gemini', 'bedrock'],
   });
 }
 
 export async function POST(req: NextRequest) {
-  let body = { provider: 'gemini' };
+  let body: { provider?: string } = { provider: 'gemini' };
   try {
     body = await req.json();
   } catch {
-    // ignore
+    // ignore malformed json
   }
 
-  if (body.provider === 'bedrock' || body.provider === 'gemini') {
-    currentProvider = body.provider;
-  }
-
-  const model =
-    currentProvider === 'bedrock'
-      ? 'Anthropic Claude 3.5 Sonnet (AWS Bedrock)'
-      : 'Google Gemini 2.5 Flash';
-
-  return NextResponse.json({
-    status: 'ok',
-    active: currentProvider,
-    model,
+  const targetProvider = normalizeAIProvider(body.provider);
+  const proxied = await proxyBackendJson<{
+    status?: string;
+    active: string;
+    model: string;
+  }>('/api/ai/provider', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: targetProvider }),
   });
+
+  const payload = proxied?.active
+    ? proxied
+    : {
+        status: 'ok',
+        active: targetProvider,
+        model: getProviderModelLabel(targetProvider),
+      };
+
+  const res = NextResponse.json(payload);
+  res.cookies.set(AI_PROVIDER_COOKIE, targetProvider, {
+    path: '/',
+    maxAge: 60 * 60 * 24 * 30,
+    sameSite: 'lax',
+  });
+  return res;
 }

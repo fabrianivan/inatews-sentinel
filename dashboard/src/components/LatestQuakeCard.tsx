@@ -1,33 +1,63 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+import {
+  AlertTriangle,
+  ArrowDown,
+  Calendar,
+  ChevronDown,
+  Crosshair,
+  Map as MapIcon,
+  MapPin,
+} from 'lucide-react';
 import type { BMKGGempaDetail, RealtimeEarthquakesData, SeismicEvent } from '@/lib/types';
 
 interface LatestQuakeCardProps {
   quake: BMKGGempaDetail | null;
   realQuakes?: RealtimeEarthquakesData | null;
   onFocusMap?: (lat: number, lon: number) => void;
+  activityPercentage?: number;
+  deepDiveTargetId?: string;
 }
 
-export default function LatestQuakeCard({ quake, realQuakes, onFocusMap }: LatestQuakeCardProps) {
-  const [activeTab, setActiveTab] = useState<'latest' | 'recent_bmkg' | 'recent_usgs'>('latest');
+interface CombinedRecentQuake {
+  source: 'BMKG' | 'USGS';
+  event: SeismicEvent;
+}
+
+export default function LatestQuakeCard({
+  quake,
+  realQuakes,
+  onFocusMap,
+  activityPercentage,
+  deepDiveTargetId,
+}: LatestQuakeCardProps) {
   const [showShakemap, setShowShakemap] = useState(false);
+  const [showAllRecent, setShowAllRecent] = useState(false);
 
-  const bmkgList: SeismicEvent[] = realQuakes?.recent_bmkg || [];
-  const usgsList: SeismicEvent[] = realQuakes?.recent_usgs || [];
+  const combinedRecent: CombinedRecentQuake[] = useMemo(() => {
+    const bmkgList = (realQuakes?.recent_bmkg || []).map((event) => ({
+      source: 'BMKG' as const,
+      event,
+    }));
+    const usgsList = (realQuakes?.recent_usgs || []).map((event) => ({
+      source: 'USGS' as const,
+      event,
+    }));
+    return [...bmkgList, ...usgsList]
+      .sort(
+        (a, b) =>
+          new Date(b.event.timestamp).getTime() - new Date(a.event.timestamp).getTime()
+      )
+      .slice(0, 8);
+  }, [realQuakes]);
 
-  if (!quake && bmkgList.length === 0) {
+  if (!quake && combinedRecent.length === 0) {
     return (
-      <div className="card latest-quake-card">
-        <div className="card__header">
-          <span className="card__title">
-            Gempa Terkini BMKG
-          </span>
-          <span className="card__badge card__badge--live">LIVE TEWS</span>
-        </div>
-        <div className="card__body" style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)' }}>
-          Memuat data real BMKG TEWS...
-        </div>
+      <div className="glass-hud rounded-2xl p-5">
+        <p className="py-8 text-center text-xs text-[var(--text-muted)]">
+          Memuat telemetri gempa BMKG TEWS...
+        </p>
       </div>
     );
   }
@@ -39,377 +69,236 @@ export default function LatestQuakeCard({ quake, realQuakes, onFocusMap }: Lates
 
   const hasDirasakan = Boolean(
     quake?.Dirasakan &&
-    quake.Dirasakan.trim() !== '' &&
-    quake.Dirasakan.trim() !== '-' &&
-    !quake.Dirasakan.toLowerCase().includes('belum ada')
+      quake.Dirasakan.trim() !== '' &&
+      quake.Dirasakan.trim() !== '-' &&
+      !quake.Dirasakan.toLowerCase().includes('belum ada')
   );
 
-  const shakemapUrl = quake?.Shakemap ? `https://data.bmkg.go.id/DataMKG/TEWS/${quake.Shakemap}` : null;
+  const shakemapUrl = quake?.Shakemap
+    ? `https://data.bmkg.go.id/DataMKG/TEWS/${quake.Shakemap}`
+    : null;
 
-  // Extract lat/lon from Coordinates "-5.33,104.55"
   const coords = (quake?.Coordinates || '').split(',');
   const lat = coords.length === 2 ? parseFloat(coords[0]) : null;
   const lon = coords.length === 2 ? parseFloat(coords[1]) : null;
+  const visibleRecent = showAllRecent ? combinedRecent : combinedRecent.slice(0, 3);
 
   return (
-    <div className="card latest-quake-card">
-      <div className="card__header" style={{ flexWrap: 'wrap', gap: '8px' }}>
-        <span className="card__title">
-          Gempa Bumi Indonesia
+    <div className="glass-hud flex flex-col gap-4 rounded-2xl p-4 sm:p-5">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-mono text-[10px] font-bold tracking-[0.14em] text-[var(--text-muted)] uppercase">
+          Gempa Terkini BMKG
         </span>
-        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-          <span className="card__badge card__badge--live">
-            <span className="live-dot-pulse"></span>
-            LIVE API
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--accent-muted)] px-2 py-0.5 font-mono text-[10px] font-bold text-[var(--accent)]">
+          <span className="live-dot-pulse" />
+          TEWS LIVE
+        </span>
+      </div>
+
+      {/* Hero Display Magnitude */}
+      {quake && (
+        <div className="space-y-3">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <div
+                className={`font-display text-5xl font-bold leading-none tracking-tight tabular-nums ${
+                  mag >= 6.5 || isTsunami
+                    ? 'text-[var(--sev-critical)]'
+                    : mag >= 5.0
+                      ? 'text-[var(--sev-high)]'
+                      : 'text-[var(--text-primary)]'
+                }`}
+              >
+                M{mag > 0 ? mag.toFixed(1) : '—'}
+              </div>
+              <div className="mt-1.5 flex items-center gap-2 font-mono text-[11px] text-[var(--text-secondary)] tabular-nums">
+                <span>Kedalaman {quake.Kedalaman}</span>
+                <span>·</span>
+                <span>{quake.Jam}</span>
+              </div>
+            </div>
+
+            <div className="text-right font-mono text-[10px] text-[var(--text-muted)]">
+              <div className="inline-flex items-center gap-1">
+                <Calendar className="h-3 w-3" />
+                <span>{quake.Tanggal}</span>
+              </div>
+              {typeof activityPercentage === 'number' && (
+                <div className="mt-1 font-bold text-[var(--accent)]">
+                  MMI {Math.round(activityPercentage)}%
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-start gap-2 text-xs font-semibold leading-snug text-[var(--text-primary)]">
+            <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--sev-critical)]" />
+            <span>{quake.Wilayah}</span>
+          </div>
+
+          {isTsunami ? (
+            <div className="flex items-start gap-2 rounded-xl border border-[var(--sev-critical-border)] bg-[var(--sev-critical-bg)] p-2.5 text-xs text-[var(--sev-critical)]">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <div className="font-bold tracking-wide uppercase">Peringatan Dini Tsunami</div>
+                <div className="mt-0.5 text-[11px] opacity-90">{quake.Potensi}</div>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-subtle)] px-3 py-2 text-[11px] text-[var(--text-secondary)]">
+              <span className="font-semibold text-[var(--sev-normal)]">Tsunami:</span>{' '}
+              {quake.Potensi || 'Tidak berpotensi tsunami'}
+            </div>
+          )}
+
+          {/* Spatial Strip */}
+          <div className="grid grid-cols-1 gap-2 rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-subtle)] p-2.5 sm:grid-cols-2">
+            <div>
+              <div className="text-[9px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+                Episenter
+              </div>
+              <div className="mt-0.5 font-mono text-[11px] font-semibold tabular-nums text-[var(--text-primary)]">
+                {quake.Lintang}, {quake.Bujur}
+              </div>
+            </div>
+            {hasDirasakan && (
+              <div>
+                <div className="text-[9px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+                  Skala Dirasakan
+                </div>
+                <div className="mt-0.5 truncate text-[11px] font-bold text-[var(--sev-high)]">
+                  {quake.Dirasakan}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Primary Actions */}
+          <div className="flex flex-wrap gap-2">
+            {lat !== null && lon !== null && onFocusMap && (
+              <button
+                type="button"
+                onClick={() => onFocusMap(lat, lon)}
+                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-[var(--accent)] px-3 py-2 text-xs font-bold text-slate-950 transition-opacity hover:opacity-90"
+              >
+                <Crosshair className="h-3.5 w-3.5" />
+                <span>Fokus Episenter</span>
+              </button>
+            )}
+            {shakemapUrl && (
+              <button
+                type="button"
+                onClick={() => setShowShakemap(!showShakemap)}
+                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-subtle)] px-3 py-2 text-xs font-semibold text-[var(--text-primary)] transition-colors hover:border-[var(--border-strong)]"
+              >
+                <MapIcon className="h-3.5 w-3.5 text-[var(--accent)]" />
+                <span>{showShakemap ? 'Tutup ShakeMap' : 'ShakeMap'}</span>
+              </button>
+            )}
+          </div>
+
+          {showShakemap && shakemapUrl && (
+            <div className="overflow-hidden rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] p-1.5">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={shakemapUrl}
+                alt={`ShakeMap BMKG ${quake.Wilayah}`}
+                className="h-auto w-full rounded-lg object-contain"
+                loading="lazy"
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Compact Significant Earthquakes Feed */}
+      <div className="border-t border-[var(--border-hairline)] pt-3">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="font-mono text-[10px] font-bold tracking-wider text-[var(--text-muted)] uppercase">
+            Gempa Signifikan Terkini
           </span>
+          {combinedRecent.length > 3 && (
+            <button
+              type="button"
+              onClick={() => setShowAllRecent((prev) => !prev)}
+              className="inline-flex items-center gap-1 text-[11px] font-semibold text-[var(--accent)] hover:underline"
+            >
+              <span>{showAllRecent ? 'Ringkas' : `Lihat ${combinedRecent.length}`}</span>
+              <ChevronDown
+                className={`h-3 w-3 transition-transform ${showAllRecent ? 'rotate-180' : ''}`}
+              />
+            </button>
+          )}
+        </div>
+
+        <div className="divide-y divide-[var(--border-hairline)]">
+          {visibleRecent.map(({ source, event: q }, idx) => {
+            const qMag = q.magnitude || 4.5;
+            return (
+              <div
+                key={`${source}-${idx}`}
+                className="flex items-center justify-between gap-2 py-2"
+              >
+                <div className="flex min-w-0 flex-1 items-baseline gap-2">
+                  <span
+                    className={`shrink-0 font-mono text-xs font-extrabold tabular-nums ${
+                      qMag >= 6.0
+                        ? 'text-[var(--sev-critical)]'
+                        : qMag >= 5.5
+                          ? 'text-[var(--sev-high)]'
+                          : 'text-[var(--text-primary)]'
+                    }`}
+                  >
+                    M{qMag.toFixed(1)}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div
+                      className="truncate text-[11px] font-medium text-[var(--text-primary)]"
+                      title={q.fault_zone}
+                    >
+                      {q.fault_zone}
+                    </div>
+                    <div className="font-mono text-[10px] text-[var(--text-muted)] tabular-nums">
+                      {source} · {q.depth.toFixed(0)} km ·{' '}
+                      {new Date(q.timestamp).toLocaleTimeString('id-ID', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}{' '}
+                      WIB
+                    </div>
+                  </div>
+                </div>
+
+                {onFocusMap && q.latitude && q.longitude && (
+                  <button
+                    type="button"
+                    onClick={() => onFocusMap(q.latitude, q.longitude)}
+                    className="shrink-0 rounded-full px-2 py-1 text-[10px] font-bold text-[var(--accent)] hover:bg-[var(--accent-muted)]"
+                  >
+                    Lihat
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {/* Sub-tab switcher */}
-      <div
-        style={{
-          display: 'flex',
-          background: 'rgba(255, 255, 255, 0.03)',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-          padding: '4px 8px',
-          gap: '4px',
-        }}
-      >
+      {deepDiveTargetId && (
         <button
           type="button"
-          onClick={() => setActiveTab('latest')}
-          style={{
-            flex: 1,
-            padding: '6px 4px',
-            fontSize: '11px',
-            fontWeight: activeTab === 'latest' ? 700 : 500,
-            color: activeTab === 'latest' ? '#00f2ff' : 'var(--text-muted)',
-            background: activeTab === 'latest' ? 'rgba(0, 242, 255, 0.1)' : 'transparent',
-            border: activeTab === 'latest' ? '1px solid rgba(0, 242, 255, 0.3)' : '1px solid transparent',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            transition: 'all 0.2s ease',
-          }}
+          onClick={() =>
+            document
+              .getElementById(deepDiveTargetId)
+              ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }
+          className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-subtle)] py-2 text-[11px] font-semibold text-[var(--text-secondary)] transition-colors hover:border-[var(--accent-border)] hover:text-[var(--accent)]"
         >
-          ⚡ Terkini BMKG
+          <span>AI Sentinel · IOC Pasut · Gunung Api</span>
+          <ArrowDown className="h-3.5 w-3.5" />
         </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('recent_bmkg')}
-          style={{
-            flex: 1,
-            padding: '6px 4px',
-            fontSize: '11px',
-            fontWeight: activeTab === 'recent_bmkg' ? 700 : 500,
-            color: activeTab === 'recent_bmkg' ? '#ff9100' : 'var(--text-muted)',
-            background: activeTab === 'recent_bmkg' ? 'rgba(255, 145, 0, 0.1)' : 'transparent',
-            border: activeTab === 'recent_bmkg' ? '1px solid rgba(255, 145, 0, 0.3)' : '1px solid transparent',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            transition: 'all 0.2s ease',
-          }}
-        >
-          📋 M5.0+ BMKG ({bmkgList.length})
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('recent_usgs')}
-          style={{
-            flex: 1,
-            padding: '6px 4px',
-            fontSize: '11px',
-            fontWeight: activeTab === 'recent_usgs' ? 700 : 500,
-            color: activeTab === 'recent_usgs' ? '#38bdf8' : 'var(--text-muted)',
-            background: activeTab === 'recent_usgs' ? 'rgba(56, 189, 248, 0.1)' : 'transparent',
-            border: activeTab === 'recent_usgs' ? '1px solid rgba(56, 189, 248, 0.3)' : '1px solid transparent',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            transition: 'all 0.2s ease',
-          }}
-        >
-          🌐 USGS ({usgsList.length})
-        </button>
-      </div>
-
-      <div className="card__body">
-        {/* ================= VIEW 1: LATEST BMKG AUTOGEMPA ================= */}
-        {activeTab === 'latest' && (
-          <>
-            {quake ? (
-              <>
-                {/* Main Magnitude & Epicenter Hero Banner */}
-                <div className="latest-quake-hero">
-                  <div className="latest-quake-hero__mag-box">
-                    <span className={`latest-quake-hero__mag ${mag >= 5.0 ? 'latest-quake-hero__mag--danger' : ''}`}>
-                      M{mag > 0 ? mag.toFixed(1) : '—'}
-                    </span>
-                    <span className="latest-quake-hero__mag-label">MAGNITUDO</span>
-                  </div>
-
-                  <div className="latest-quake-hero__details">
-                    <div className="latest-quake-hero__wilayah" title={quake.Wilayah}>
-                      📍 {quake.Wilayah}
-                    </div>
-                    <div className="latest-quake-hero__meta">
-                      <span>Kedalaman {quake.Kedalaman}</span>
-                      <span className="meta-sep">•</span>
-                      <span>{quake.Jam}</span>
-                    </div>
-                    <div className="latest-quake-hero__date">
-                      📅 {quake.Tanggal}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Peringatan Dini Tsunami — Hanya jika ada peringatan */}
-                {isTsunami && (
-                  <div className="latest-quake-status latest-quake-status--danger">
-                    <span className="latest-quake-status__icon">🚨</span>
-                    <div className="latest-quake-status__text">
-                      <strong>PERINGATAN DINI TSUNAMI (INATEWS)</strong>
-                      <div>{quake.Potensi}</div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Details Grid: Koordinat & Efek Gempa Dirasakan */}
-                <div className="latest-quake-grid">
-                  <div className="latest-quake-grid__item">
-                    <span className="latest-quake-grid__label">Koordinat</span>
-                    <span className="latest-quake-grid__value">{quake.Lintang}, {quake.Bujur}</span>
-                  </div>
-                  {hasDirasakan && (
-                    <div className="latest-quake-grid__item">
-                      <span className="latest-quake-grid__label">Efek Gempa Dirasakan</span>
-                      <span className="latest-quake-grid__value" style={{ color: '#ff9100', fontWeight: 700 }}>
-                        {quake.Dirasakan}
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Action Buttons: View on Map & Shakemap */}
-                <div className="latest-quake-actions">
-                  {lat !== null && lon !== null && onFocusMap && (
-                    <button
-                      type="button"
-                      className="quake-action-btn"
-                      onClick={() => onFocusMap(lat, lon)}
-                      title="Fokuskan posisi episenter di peta"
-                    >
-                      🎯 Fokus di Peta
-                    </button>
-                  )}
-
-                  {shakemapUrl && (
-                    <button
-                      type="button"
-                      className="quake-action-btn quake-action-btn--secondary"
-                      onClick={() => setShowShakemap(!showShakemap)}
-                      title="Lihat peta guncangan BMKG"
-                    >
-                      🗺️ {showShakemap ? 'Tutup Shakemap' : 'Lihat Shakemap BMKG'}
-                    </button>
-                  )}
-                </div>
-
-                {/* Embedded Shakemap Preview */}
-                {showShakemap && shakemapUrl && (
-                  <div className="latest-quake-shakemap">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={shakemapUrl}
-                      alt={`Shakemap BMKG ${quake.Wilayah}`}
-                      className="latest-quake-shakemap__img"
-                      loading="lazy"
-                    />
-                    <div className="latest-quake-shakemap__caption">
-                      Peta Estimasi Tingkat Guncangan (BMKG ShakeMap)
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)' }}>
-                Belum ada data gempa terkini.
-              </div>
-            )}
-          </>
-        )}
-
-        {/* ================= VIEW 2: RECENT BMKG M5.0+ LIST ================= */}
-        {activeTab === 'recent_bmkg' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '380px', overflowY: 'auto' }}>
-            {bmkgList.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)' }}>
-                Memuat daftar gempa M5.0+ BMKG...
-              </div>
-            ) : (
-              bmkgList.map((q, idx) => {
-                const qMag = q.magnitude || 5.0;
-                const badgeBg = qMag >= 6.0 ? '#ef4444' : qMag >= 5.5 ? '#f97316' : '#eab308';
-                return (
-                  <div
-                    key={`bmkg-${idx}`}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      background: 'rgba(255, 255, 255, 0.02)',
-                      border: '1px solid rgba(255, 255, 255, 0.06)',
-                      borderRadius: '8px',
-                      padding: '8px 10px',
-                      gap: '8px',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
-                      <span
-                        style={{
-                          background: badgeBg,
-                          color: '#fff',
-                          fontWeight: 800,
-                          fontSize: '12px',
-                          padding: '3px 7px',
-                          borderRadius: '6px',
-                          minWidth: '42px',
-                          textAlign: 'center',
-                        }}
-                      >
-                        M{qMag.toFixed(1)}
-                      </span>
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div
-                          style={{
-                            fontSize: '12px',
-                            fontWeight: 600,
-                            color: '#f1f5f9',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                          }}
-                          title={q.fault_zone}
-                        >
-                          {q.fault_zone}
-                        </div>
-                        <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
-                          Kedalaman {q.depth} km • {new Date(q.timestamp).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} {new Date(q.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB
-                        </div>
-                      </div>
-                    </div>
-
-                    {onFocusMap && q.latitude && q.longitude && (
-                      <button
-                        type="button"
-                        onClick={() => onFocusMap(q.latitude, q.longitude)}
-                        style={{
-                          background: 'rgba(0, 242, 255, 0.1)',
-                          border: '1px solid rgba(0, 242, 255, 0.3)',
-                          color: '#00f2ff',
-                          borderRadius: '4px',
-                          padding: '4px 8px',
-                          fontSize: '10px',
-                          cursor: 'pointer',
-                          whiteSpace: 'nowrap',
-                        }}
-                        title="Fokuskan di peta"
-                      >
-                        🎯 Peta
-                      </button>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
-        )}
-
-        {/* ================= VIEW 3: USGS REGIONAL LIST ================= */}
-        {activeTab === 'recent_usgs' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '380px', overflowY: 'auto' }}>
-            {usgsList.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)' }}>
-                Memuat data USGS regional...
-              </div>
-            ) : (
-              usgsList.map((q, idx) => {
-                const qMag = q.magnitude || 4.5;
-                const badgeBg = qMag >= 6.0 ? '#ef4444' : qMag >= 5.0 ? '#0284c7' : '#0ea5e9';
-                return (
-                  <div
-                    key={`usgs-${idx}`}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      background: 'rgba(255, 255, 255, 0.02)',
-                      border: '1px solid rgba(255, 255, 255, 0.06)',
-                      borderRadius: '8px',
-                      padding: '8px 10px',
-                      gap: '8px',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
-                      <span
-                        style={{
-                          background: badgeBg,
-                          color: '#fff',
-                          fontWeight: 800,
-                          fontSize: '12px',
-                          padding: '3px 7px',
-                          borderRadius: '6px',
-                          minWidth: '42px',
-                          textAlign: 'center',
-                        }}
-                      >
-                        M{qMag.toFixed(1)}
-                      </span>
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div
-                          style={{
-                            fontSize: '12px',
-                            fontWeight: 600,
-                            color: '#f1f5f9',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                          }}
-                          title={q.fault_zone}
-                        >
-                          {q.fault_zone}
-                        </div>
-                        <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
-                          Kedalaman {q.depth.toFixed(0)} km • {new Date(q.timestamp).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} {new Date(q.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
-                        </div>
-                      </div>
-                    </div>
-
-                    {onFocusMap && q.latitude && q.longitude && (
-                      <button
-                        type="button"
-                        onClick={() => onFocusMap(q.latitude, q.longitude)}
-                        style={{
-                          background: 'rgba(56, 189, 248, 0.1)',
-                          border: '1px solid rgba(56, 189, 248, 0.3)',
-                          color: '#38bdf8',
-                          borderRadius: '4px',
-                          padding: '4px 8px',
-                          fontSize: '10px',
-                          cursor: 'pointer',
-                          whiteSpace: 'nowrap',
-                        }}
-                        title="Fokuskan di peta"
-                      >
-                        🎯 Peta
-                      </button>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 }
-

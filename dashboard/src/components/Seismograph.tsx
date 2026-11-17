@@ -1,35 +1,39 @@
 'use client';
 
 import { useEffect, useRef, useState, useMemo } from 'react';
+import {
+  Activity,
+  ArrowUpRight,
+  Compass,
+  Plane,
+  Radio,
+  Wind,
+} from 'lucide-react';
 import type { VolcanoEruption } from '@/lib/types';
 import {
   INDONESIAN_VOLCANOES,
+  buildVolcanoInspectionReport,
   findVolcanoLocation,
+  getVolcanoReports,
   getVolcanicAshTrajectory,
   type VolcanicAshTrajectory,
 } from '@/lib/volcanoData';
+import VolcanoChip from './VolcanoChip';
 
 interface SeismographProps {
-  seismicEnergy?: number; // mm/s
-  activityLevel?: number; // 0 - 100%
+  seismicEnergy?: number;
+  activityLevel?: number;
   phaseName?: string;
   volcanoes?: VolcanoEruption[];
   selectedVolcano?: string | null;
   onSelectVolcano?: (name: string) => void;
   onInspectSeismogram?: (volcano: VolcanoEruption) => void;
   isSimulasi?: boolean;
+  theme?: 'dark' | 'light';
+  compactHud?: boolean;
 }
 
-// Exactly the 7 station filter options requested
-export const SEISMOGRAPH_STATIONS = [
-  { id: 'BMKG_REGIONAL', label: '📡 BMKG Broadband (LEM / JATS)', isBMKG: true },
-  { id: 'Anak Krakatau', label: '🌋 Anak Krakatau', isBMKG: false },
-  { id: 'Ibu', label: '🌋 Ibu', isBMKG: false },
-  { id: 'Lewotobi Laki-laki', label: '🌋 Lewotobi Laki-laki', isBMKG: false },
-  { id: 'Ili Lewotolok', label: '🌋 Ili Lewotolok', isBMKG: false },
-  { id: 'Semeru', label: '🌋 Semeru', isBMKG: false },
-  { id: 'Merapi', label: '🌋 Merapi', isBMKG: false },
-];
+const BMKG_STATION_ID = 'BMKG_REGIONAL';
 
 export default function Seismograph({
   seismicEnergy = 1.2,
@@ -40,42 +44,48 @@ export default function Seismograph({
   onSelectVolcano,
   onInspectSeismogram,
   isSimulasi = false,
+  theme = 'dark',
+  compactHud = false,
 }: SeismographProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
   const pointsRef = useRef<number[]>([]);
+  const stripRef = useRef<HTMLDivElement | null>(null);
   const [activeTarget, setActiveTarget] = useState<string>(selectedVolcano || 'Anak Krakatau');
+  const [showAshDetails, setShowAshDetails] = useState(false);
 
-  // Keep internal activeTarget synced with parent selectedVolcano
   useEffect(() => {
     if (selectedVolcano) {
       setActiveTarget(selectedVolcano);
     }
   }, [selectedVolcano]);
 
-  // Find geo metadata for currently active volcano/station
-  const isBMKGMode = activeTarget === 'BMKG_REGIONAL';
-  const geo = useMemo(() => {
-    return isBMKGMode ? null : findVolcanoLocation(activeTarget);
-  }, [activeTarget, isBMKGMode]);
+  // Keep the selected station visible when the selection comes from the map or the volcano hub.
+  // Scrolls the strip only (never the page), so picking a volcano elsewhere does not move the viewport.
+  useEffect(() => {
+    const strip = stripRef.current;
+    const chip = strip?.querySelector<HTMLElement>('[data-selected="true"]');
+    if (!strip || !chip) return;
+    const centered = chip.offsetLeft - (strip.clientWidth - chip.offsetWidth) / 2;
+    strip.scrollTo({ left: Math.max(0, centered), behavior: 'smooth' });
+  }, [activeTarget]);
 
-  // Find matching PVMBG live report for this volcano
-  const liveReport = useMemo(() => {
-    if (!geo) return null;
-    return volcanoes.find((e) => {
-      const cleanErup = e.volcano_name.toLowerCase().trim().replace(/^g\.\s*/, '');
-      return geo.name.toLowerCase().includes(cleanErup) || cleanErup.includes(geo.name.toLowerCase());
-    }) || null;
-  }, [geo, volcanoes]);
+  const isBMKGMode = activeTarget === BMKG_STATION_ID;
+  const geo = useMemo(
+    () => (isBMKGMode ? null : findVolcanoLocation(activeTarget)),
+    [activeTarget, isBMKGMode]
+  );
 
-  // Volcanic Ash Trajectory for active volcano (or simulated default)
+  const liveReport = useMemo(
+    () => (geo ? getVolcanoReports(geo, volcanoes)[0] ?? null : null),
+    [geo, volcanoes]
+  );
+
   const ashTrajectory: VolcanicAshTrajectory = useMemo(() => {
     const targetName = isBMKGMode ? 'Anak Krakatau' : activeTarget;
     return getVolcanicAshTrajectory(targetName);
   }, [isBMKGMode, activeTarget]);
 
-
-  // Parse amplitude & duration
   const ampNum = useMemo(() => {
     if (liveReport?.amplitude) {
       return parseFloat(liveReport.amplitude.replace(/[^0-9.]/g, '')) || 35;
@@ -87,7 +97,6 @@ export default function Seismograph({
   const isAwas = alertLevel.includes('AWAS');
   const isSiaga = alertLevel.includes('SIAGA');
 
-  // References for animation loop
   const configRef = useRef({
     isBMKGMode,
     ampNum,
@@ -95,6 +104,7 @@ export default function Seismograph({
     activityLevel,
     isAwas,
     isSiaga,
+    theme,
   });
 
   useEffect(() => {
@@ -105,25 +115,30 @@ export default function Seismograph({
       activityLevel,
       isAwas,
       isSiaga,
+      theme,
     };
-  }, [isBMKGMode, ampNum, seismicEnergy, activityLevel, isAwas, isSiaga]);
+  }, [isBMKGMode, ampNum, seismicEnergy, activityLevel, isAwas, isSiaga, theme]);
 
-  // Canvas waveform animation
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     let width = (canvas.width = canvas.parentElement?.clientWidth || 400);
-    const height = (canvas.height = 140);
+    const height = (canvas.height = 132);
 
-    const handleResize = () => {
+    const updateSize = () => {
       if (!canvas || !canvas.parentElement) return;
-      width = canvas.width = canvas.parentElement.clientWidth;
+      width = canvas.width = canvas.parentElement.clientWidth || 400;
     };
-    window.addEventListener('resize', handleResize);
+
+    window.addEventListener('resize', updateSize);
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && canvas.parentElement) {
+      resizeObserver = new ResizeObserver(updateSize);
+      resizeObserver.observe(canvas.parentElement);
+    }
 
     const maxPoints = 300;
     if (pointsRef.current.length === 0) {
@@ -141,44 +156,43 @@ export default function Seismograph({
         activityLevel: act,
         isAwas: awas,
         isSiaga: siaga,
+        theme: currentTheme,
       } = configRef.current;
 
       const midY = height / 2;
       let rawOffset = 0;
 
       if (isBMKG) {
-        // Tectonic P/S Waveform
         const normalizedAct = Math.max(0.1, act / 100);
         const pWave = Math.sin(tick * 0.45) * (energy * 1.2);
         const sWave = Math.sin(tick * 0.15) * (energy * 2.8 * normalizedAct);
-        const burst = Math.random() < 0.05 + normalizedAct * 0.2 ? (Math.random() - 0.5) * energy * 4.5 : 0;
+        const burst =
+          Math.random() < 0.05 + normalizedAct * 0.2
+            ? (Math.random() - 0.5) * energy * 4.5
+            : 0;
         rawOffset = pWave + sWave + burst;
       } else {
-        // Volcanic Tremor / Explosion Pulse Waveform
         const ampScale = Math.min(45, Math.max(8, amp * 0.75));
         const tremorBase = Math.sin(tick * 0.38) * (ampScale * 0.35);
         const harmonicFluid = Math.sin(tick * 0.85) * (ampScale * 0.25);
         const volcanicLP = Math.sin(tick * 0.12) * (ampScale * 0.45);
-        // Random explosion / ash emission shock bursts
         const burstProb = awas ? 0.22 : siaga ? 0.12 : 0.05;
-        const explosionBurst = Math.random() < burstProb ? (Math.random() - 0.5) * ampScale * 1.5 : 0;
+        const explosionBurst =
+          Math.random() < burstProb ? (Math.random() - 0.5) * ampScale * 1.5 : 0;
         rawOffset = tremorBase + harmonicFluid + volcanicLP + explosionBurst;
       }
 
       const clampedOffset = Math.max(-height / 2 + 10, Math.min(height / 2 - 10, rawOffset));
-      const nextY = midY + clampedOffset;
-
-      pointsRef.current.push(nextY);
+      pointsRef.current.push(midY + clampedOffset);
       if (pointsRef.current.length > maxPoints) {
         pointsRef.current.shift();
       }
 
-      // Dark background
-      ctx.fillStyle = '#060a14';
+      const isLight = currentTheme === 'light';
+      ctx.fillStyle = isLight ? '#f4f8fc' : '#050914';
       ctx.fillRect(0, 0, width, height);
 
-      // Grid division lines
-      ctx.strokeStyle = 'rgba(0, 242, 255, 0.06)';
+      ctx.strokeStyle = isLight ? 'rgba(15, 23, 42, 0.06)' : 'rgba(148, 163, 184, 0.08)';
       ctx.lineWidth = 1;
       const gridStep = 40;
       for (let x = 0; x < width; x += gridStep) {
@@ -194,8 +208,7 @@ export default function Seismograph({
         ctx.stroke();
       }
 
-      // Baseline center reference line
-      ctx.strokeStyle = 'rgba(0, 242, 255, 0.2)';
+      ctx.strokeStyle = isLight ? 'rgba(2, 132, 199, 0.24)' : 'rgba(34, 211, 238, 0.22)';
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
       ctx.moveTo(0, midY);
@@ -203,554 +216,243 @@ export default function Seismograph({
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Stroke & Glow Colors based on target mode and alert level
-      let strokeColor = '#00f2ff';
-      let glowColor = 'rgba(0, 242, 255, 0.4)';
-
+      let strokeColor = isLight ? '#0284c7' : '#22d3ee';
       if (!isBMKG) {
-        if (awas) {
-          strokeColor = '#ff2a5f';
-          glowColor = 'rgba(255, 42, 95, 0.7)';
-        } else if (siaga) {
-          strokeColor = '#ff5722';
-          glowColor = 'rgba(255, 87, 34, 0.6)';
-        } else {
-          strokeColor = '#ff9800';
-          glowColor = 'rgba(255, 152, 0, 0.5)';
-        }
-      } else {
-        if (act > 80) {
-          strokeColor = '#ff2a5f';
-          glowColor = 'rgba(255, 42, 95, 0.6)';
-        } else if (act > 50) {
-          strokeColor = '#ff9100';
-          glowColor = 'rgba(255, 145, 0, 0.5)';
-        }
+        strokeColor = awas ? '#fb7185' : siaga ? '#fb923c' : '#fbbf24';
+      } else if (act > 80) {
+        strokeColor = '#fb7185';
+      } else if (act > 50) {
+        strokeColor = '#fb923c';
       }
 
-      // Draw continuous waveform trace
-      ctx.shadowColor = glowColor;
-      ctx.shadowBlur = 8;
       ctx.strokeStyle = strokeColor;
-      ctx.lineWidth = 2.0;
+      ctx.lineWidth = 1.75;
       ctx.beginPath();
-
-      const dx = width / (pointsRef.current.length - 1);
+      const dx = width / (maxPoints - 1);
       for (let i = 0; i < pointsRef.current.length; i++) {
-        const x = i * dx;
-        const y = pointsRef.current[i];
-        if (i === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
+        const px = i * dx;
+        const py = pointsRef.current[i];
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
       }
       ctx.stroke();
-      ctx.shadowBlur = 0;
 
-      // Stylus recording point
       const lastIdx = pointsRef.current.length - 1;
-      const lastX = lastIdx * dx;
-      const lastY = pointsRef.current[lastIdx];
-
       ctx.fillStyle = strokeColor;
       ctx.beginPath();
-      ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
+      ctx.arc(lastIdx * dx, pointsRef.current[lastIdx], 3.5, 0, Math.PI * 2);
       ctx.fill();
 
       animationRef.current = requestAnimationFrame(render);
     };
 
     animationRef.current = requestAnimationFrame(render);
-
     return () => {
-      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('resize', updateSize);
+      resizeObserver?.disconnect();
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
     };
   }, []);
 
   const handleSelect = (targetName: string) => {
     setActiveTarget(targetName);
-    if (targetName !== 'BMKG_REGIONAL') {
+    if (targetName !== BMKG_STATION_ID) {
       onSelectVolcano?.(targetName);
     }
   };
 
-  // Prepare fallback eruption if opening inspection
-  const effectiveInspectionReport: VolcanoEruption = useMemo(() => {
-    if (liveReport) return liveReport;
-    return {
-      id: `erup-${geo?.name.toLowerCase().replace(/\s+/g, '-') || 'active'}-gen`,
-      volcano_name: geo?.name || 'Gunung Api Aktif',
-      time: 'Live Telemetri',
-      date: new Date().toLocaleDateString('id-ID'),
-      description: `Rekaman getaran seismik pos pengamatan ${geo?.pgaStation || 'PVMBG'} dengan aktivitas tremor vulkanik kontinu.`,
-      amplitude: `${ampNum} mm`,
-      duration: '45 detik',
-      visual_ash: 'Kolom asap kawah kawah aktif',
-      author: 'Petugas Pos Pengamatan PVMBG',
-      alert_level: alertLevel,
-      recommendation: geo?.defaultLevel || 'Waspadai potensi erupsi dan ikuti arahan PVMBG',
-      timestamp: new Date().toISOString(),
-    };
-  }, [liveReport, geo, ampNum, alertLevel]);
+  /** Opens the PVMBG analysis for one volcano and tunes the waveform to it. */
+  const handleAnalyze = (volcanoName: string) => {
+    const location = findVolcanoLocation(volcanoName);
+    if (!location) return;
+    handleSelect(location.name);
+    onInspectSeismogram?.(buildVolcanoInspectionReport(location, volcanoes));
+  };
 
   return (
-    <div id="seismograph-container" className="seismograph-container card" style={{ padding: '14px 18px', gap: '10px' }}>
-      {/* Target Selector Toolbar (BMKG vs Volcanoes) */}
+    <div
+      id="seismograph-container"
+      className={`${
+        compactHud ? 'glass-hud rounded-2xl p-3' : 'matte-card p-5 sm:p-6'
+      } flex flex-col gap-2.5`}
+    >
+      {/* Station Selection Strip — every volcano carries its own Analisis PVMBG action */}
       <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: '8px',
-          paddingBottom: '10px',
-          borderBottom: '1px solid var(--border-subtle)',
-        }}
+        className={`flex items-center gap-2 ${
+          compactHud ? 'pb-1' : 'border-b border-[var(--border-hairline)] pb-2.5'
+        }`}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: '10px', fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
-            LOKASI SEISMOGRAF:
-          </span>
-
-          {/* 7 Requested Filter Options */}
-          {SEISMOGRAPH_STATIONS.map((station) => {
-            const isSelected = activeTarget === station.id;
-            const hasReport =
-              !station.isBMKG &&
-              volcanoes.some(
-                (e) =>
-                  e.volcano_name.toLowerCase().includes(station.id.toLowerCase()) ||
-                  station.id.toLowerCase().includes(e.volcano_name.toLowerCase())
-              );
-
-            return (
-              <button
-                key={station.id}
-                onClick={() => handleSelect(station.id)}
-                style={{
-                  padding: '5px 10px',
-                  borderRadius: '6px',
-                  fontSize: '11px',
-                  fontWeight: isSelected ? 800 : 600,
-                  cursor: 'pointer',
-                  background: isSelected
-                    ? station.isBMKG
-                      ? 'rgba(0, 242, 255, 0.18)'
-                      : 'rgba(255, 87, 34, 0.22)'
-                    : hasReport
-                    ? 'rgba(255, 87, 34, 0.08)'
-                    : 'rgba(255, 255, 255, 0.04)',
-                  border: `1px solid ${
-                    isSelected
-                      ? station.isBMKG
-                        ? '#00f2ff'
-                        : '#ff5722'
-                      : hasReport
-                      ? 'rgba(255, 87, 34, 0.4)'
-                      : 'var(--border-subtle)'
-                  }`,
-                  color: isSelected
-                    ? station.isBMKG
-                      ? '#00f2ff'
-                      : '#ff9800'
-                    : hasReport
-                    ? '#ff7043'
-                    : 'var(--text-secondary)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  boxShadow: isSelected
-                    ? station.isBMKG
-                      ? '0 0 10px rgba(0, 242, 255, 0.3)'
-                      : '0 0 10px rgba(255, 87, 34, 0.3)'
-                    : 'none',
-                  transition: 'all 0.2s ease',
-                }}
-              >
-                <span>{station.label}</span>
-                {hasReport && (
-                  <span
-                    style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#ff2a5f' }}
-                  ></span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Action Button: Analisis Citra Seismogram PVMBG */}
-        <button
-          onClick={() => {
-            if (isBMKGMode) {
-              handleSelect('Anak Krakatau');
-            }
-            onInspectSeismogram?.(effectiveInspectionReport);
-          }}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '6px 12px',
-            borderRadius: '6px',
-            fontSize: '11px',
-            fontWeight: 800,
-            background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.25), rgba(0, 242, 255, 0.18))',
-            border: '1px solid rgba(168, 85, 247, 0.6)',
-            color: '#fff',
-            cursor: 'pointer',
-            boxShadow: '0 0 12px rgba(168, 85, 247, 0.35)',
-            transition: 'all 0.2s ease',
-          }}
-          title="Buka analisis citra rekaman seismogram PVMBG dan interpretasi fisis kawah"
+        <span className="shrink-0 font-mono text-[10px] font-bold tracking-wider text-[var(--text-muted)] uppercase">
+          SEISMOGRAF:
+        </span>
+        <div
+          ref={stripRef}
+          className="no-scrollbar relative flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [mask-image:linear-gradient(to_right,#000_calc(100%-28px),transparent)]"
         >
-          <span>🔬</span>
-          <span>ANALISIS CITRA SEISMOGRAM PVMBG</span>
-          {liveReport?.image_url && (
-            <span
-              style={{
-                background: '#10b981',
-                color: '#fff',
-                fontSize: '9px',
-                padding: '1px 5px',
-                borderRadius: '4px',
-              }}
-            >
-              FOTO LIVE
-            </span>
-          )}
-        </button>
+          <button
+            type="button"
+            aria-pressed={isBMKGMode}
+            data-selected={isBMKGMode}
+            onClick={() => handleSelect(BMKG_STATION_ID)}
+            title="Jaringan broadband nasional BMKG (LEM / JATS)"
+            className={`inline-flex shrink-0 items-center border font-semibold transition-colors ${
+              compactHud
+                ? 'min-h-6 gap-1 rounded-full px-2 text-[10px]'
+                : 'gap-1.5 rounded-lg px-2.5 py-1.5 text-xs'
+            } ${
+              isBMKGMode
+                ? 'border-[var(--accent-border)] bg-[var(--accent-muted)] text-[var(--accent)]'
+                : 'border-[var(--border-hairline)] bg-[var(--surface-2)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            <Radio className={compactHud ? 'h-3 w-3' : 'h-3.5 w-3.5'} aria-hidden="true" />
+            <span>{compactHud ? 'BMKG' : 'BMKG Broadband'}</span>
+          </button>
+
+          {INDONESIAN_VOLCANOES.map((volcano) => (
+            <VolcanoChip
+              key={volcano.name}
+              name={volcano.name}
+              size={compactHud ? 'sm' : 'md'}
+              selected={geo?.name === volcano.name}
+              reportCount={getVolcanoReports(volcano, volcanoes).length}
+              onSelect={() => handleSelect(volcano.name)}
+              onAnalyze={() => handleAnalyze(volcano.name)}
+            />
+          ))}
+
+          {/* Lets the last chip scroll clear of the fade mask */}
+          <span className="w-5 shrink-0" aria-hidden="true" />
+        </div>
       </div>
 
-      {/* Volcanic Ash Dispersion & Trajectory Card when Eruption occurs or in Simulation */}
-      {(!isBMKGMode || isSimulasi || liveReport || isAwas || isSiaga) && (
-        <div
-          className="ash-trajectory-hud"
-          style={{
-            background: 'linear-gradient(135deg, rgba(234, 88, 12, 0.16), rgba(185, 28, 28, 0.10))',
-            border: '1px solid rgba(249, 115, 22, 0.45)',
-            borderRadius: '8px',
-            padding: '12px 14px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '10px',
-            boxShadow: '0 0 18px rgba(249, 115, 22, 0.15)',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: '8px',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '16px' }}>💨</span>
-              <span
-                style={{
-                  fontWeight: 800,
-                  fontSize: '12px',
-                  color: '#ffedd5',
-                  letterSpacing: '0.04em',
-                }}
-              >
-                {isSimulasi
-                  ? 'SIMULASI SEBARAN & ARAH ABU VULKANIK (VONA ADVISORY)'
-                  : 'PROYEKSI SEBARAN & ARAH ABU VULKANIK (VONA ADVISORY)'}
-              </span>
-              <span style={{ fontSize: '11px', color: '#fed7aa', fontWeight: 600 }}>
-                • Pos Pemantauan G. {ashTrajectory.volcanoName}
-              </span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span
-                style={{
-                  padding: '3px 8px',
-                  borderRadius: '4px',
-                  fontSize: '10px',
-                  fontWeight: 800,
-                  background: ashTrajectory.vonaColorCode === 'RED' ? '#ef4444' : '#f97316',
-                  color: '#fff',
-                  boxShadow: '0 0 10px rgba(239, 68, 68, 0.5)',
-                  letterSpacing: '0.04em',
-                }}
-              >
-                VONA: {ashTrajectory.vonaColorCode} ALERT
-              </span>
-              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                {isSimulasi ? 'DRILL SIMULASI' : 'MONITORING PVMBG'}
-              </span>
-            </div>
-          </div>
-
-          {/* 6 Telemetry Metrics including Eruption Duration & Ash Dispersion Duration */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-              gap: '8px',
-            }}
-          >
-            {/* 1. Arah Abu Vulkanik */}
-            <div
-              style={{
-                background: 'rgba(6, 10, 20, 0.65)',
-                padding: '8px 12px',
-                borderRadius: '6px',
-                border: '1px solid rgba(249, 115, 22, 0.25)',
-              }}
-            >
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>
-                🧭 ARAH ABU VULKANIK:
-              </div>
-              <div
-                style={{
-                  fontSize: '13px',
-                  fontWeight: 800,
-                  color: '#fb923c',
-                  marginTop: '2px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                }}
-              >
-                <span>{ashTrajectory.windDirectionCardinal}</span>
-                <span style={{ color: '#fed7aa', fontSize: '11px' }}>
-                  ({ashTrajectory.windDirectionDeg}°)
-                </span>
-                <span style={{ fontSize: '14px' }}>↙</span>
-              </div>
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                Arah pergerakan angin dominan
-              </div>
-            </div>
-
-            {/* 2. Perkiraan Durasi Erupsi */}
-            <div
-              style={{
-                background: 'rgba(6, 10, 20, 0.65)',
-                padding: '8px 12px',
-                borderRadius: '6px',
-                border: '1px solid rgba(249, 115, 22, 0.25)',
-              }}
-            >
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>
-                ⏱️ PERKIRAAN DURASI ERUPSI:
-              </div>
-              <div style={{ fontSize: '13px', fontWeight: 800, color: '#f59e0b', marginTop: '2px' }}>
-                {liveReport?.duration ? `${liveReport.duration} (Fase Semburan)` : ashTrajectory.eruptionDurationEst}
-              </div>
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                Durasi getaran tremor letusan
-              </div>
-            </div>
-
-            {/* 3. Perkiraan Durasi Sebaran Abu */}
-            <div
-              style={{
-                background: 'rgba(6, 10, 20, 0.65)',
-                padding: '8px 12px',
-                borderRadius: '6px',
-                border: '1px solid rgba(249, 115, 22, 0.25)',
-              }}
-            >
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>
-                ⏳ PERKIRAAN DURASI SEBARAN:
-              </div>
-              <div style={{ fontSize: '13px', fontWeight: 800, color: '#38bdf8', marginTop: '2px' }}>
-                {ashTrajectory.ashDispersionDurationEst}
-              </div>
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                {ashTrajectory.totalHazardWindow}
-              </div>
-            </div>
-
-            {/* 4. Kecepatan Angin */}
-            <div
-              style={{
-                background: 'rgba(6, 10, 20, 0.65)',
-                padding: '8px 12px',
-                borderRadius: '6px',
-                border: '1px solid rgba(249, 115, 22, 0.25)',
-              }}
-            >
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>
-                💨 KECEPATAN ANGIN TROPOSFER:
-              </div>
-              <div style={{ fontSize: '13px', fontWeight: 800, color: '#fcd34d', marginTop: '2px' }}>
-                {ashTrajectory.windSpeedKts} knot{' '}
-                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                  (~{Math.round(ashTrajectory.windSpeedKts * 1.852)} km/j)
-                </span>
-              </div>
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                Lapisan FL100 - FL180
-              </div>
-            </div>
-
-            {/* 5. Tinggi Kolom Erupsi */}
-            <div
-              style={{
-                background: 'rgba(6, 10, 20, 0.65)',
-                padding: '8px 12px',
-                borderRadius: '6px',
-                border: '1px solid rgba(249, 115, 22, 0.25)',
-              }}
-            >
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>
-                ⬆️ TINGGI KOLOM ERUPSI:
-              </div>
-              <div style={{ fontSize: '13px', fontWeight: 800, color: '#f87171', marginTop: '2px' }}>
-                ±{ashTrajectory.plumeHeightMeters.toLocaleString('id-ID')} m dpl
-              </div>
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                {ashTrajectory.plumeColor}
-              </div>
-            </div>
-
-            {/* 6. Radius Sebaran & Sektor Bahaya */}
-            <div
-              style={{
-                background: 'rgba(6, 10, 20, 0.65)',
-                padding: '8px 12px',
-                borderRadius: '6px',
-                border: '1px solid rgba(249, 115, 22, 0.25)',
-              }}
-            >
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700 }}>
-                ⚠️ RADIUS SEBARAN BAHAYA:
-              </div>
-              <div style={{ fontSize: '13px', fontWeight: 800, color: '#f43f5e', marginTop: '2px' }}>
-                Radius {ashTrajectory.hazardRadiusKm} km
-              </div>
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                Sektor {ashTrajectory.windDirectionCardinal}
-              </div>
-            </div>
-          </div>
-
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: '6px',
-              fontSize: '11px',
-              color: '#fed7aa',
-              borderTop: '1px solid rgba(249, 115, 22, 0.2)',
-              paddingTop: '8px',
-            }}
-          >
-            <span>
-              ✈️ <strong>Koridor ATS Penerbangan:</strong> {ashTrajectory.affectedAviationRoute}
-            </span>
-            <span style={{ color: '#fdba74' }}>
-              📍 <strong>Sektor Terdampak:</strong> {ashTrajectory.sectorNotice}
-            </span>
-          </div>
-        </div>
-      )}
-
-
-      {/* Seismograph Header & Metadata Bar */}
-      <div className="seismograph__header" style={{ padding: '4px 0' }}>
-        <div className="seismograph__title">
-          <span className="seismograph__pulse-indicator" style={{ background: isBMKGMode ? '#00f2ff' : '#ff5722' }}></span>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              <span style={{ fontWeight: 800, color: 'var(--text-primary)', fontSize: '13px' }}>
-                {isBMKGMode ? 'BMKG REGIONAL BROADBAND SEISMIC ARRAY' : `POS SEISMOGRAF: ${geo?.pgaStation.toUpperCase()}`}
+      {/* Metadata + Telemetry Strip */}
+      {!compactHud && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 text-xs font-bold text-[var(--text-primary)]">
+                <Activity className="h-3.5 w-3.5 text-[var(--accent)]" />
+                {isBMKGMode
+                  ? 'Jaringan Broadband Nasional BMKG'
+                  : `Pos PGA: ${geo?.pgaStation || activeTarget}`}
               </span>
               {!isBMKGMode && (
                 <span
-                  className={`volcano-card__level-badge ${
+                  className={`rounded border px-1.5 py-0.5 font-mono text-[9px] font-bold ${
                     isAwas
-                      ? 'volcano-card__level-badge--awas'
+                      ? 'border-[var(--sev-critical-border)] bg-[var(--sev-critical-bg)] text-[var(--sev-critical)]'
                       : isSiaga
-                      ? 'volcano-card__level-badge--siaga'
-                      : 'volcano-card__level-badge--waspada'
+                      ? 'border-[var(--sev-high-border)] bg-[var(--sev-high-bg)] text-[var(--sev-high)]'
+                      : 'border-[var(--sev-elevated-border)] bg-[var(--sev-elevated-bg)] text-[var(--sev-elevated)]'
                   }`}
-                  style={{ fontSize: '9px', padding: '2px 6px' }}
                 >
                   {alertLevel}
                 </span>
               )}
             </div>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+            <p className="mt-0.5 truncate text-[11px] text-[var(--text-muted)]">
               {isBMKGMode
-                ? 'Stasiun LEM (Lembang, Jabar) & JATS (Jatiluhur) • Komponen Z-Vertical • 100 Hz Streaming'
-                : `Gunung ${geo?.name} (${geo?.province}) • ${geo?.pos[0].toFixed(3)}°S, ${geo?.pos[1].toFixed(3)}°E • Elevasi ${geo?.elevation} mdpl`}
-            </span>
+                ? 'Stasiun LEM (Lembang) & JATS (Jatiluhur) · Komponen Z · 100 Hz Streaming'
+                : `G. ${geo?.name} (${geo?.province}) · Elevasi ${geo?.elevation} mdpl · ${geo?.sensorType}`}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums">
+            {!isBMKGMode && liveReport ? (
+              <>
+                <span className="rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2 py-0.5 text-[var(--text-secondary)]">
+                  Amp <strong className="text-[var(--sev-critical)]">{liveReport.amplitude}</strong>
+                </span>
+                <span className="rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2 py-0.5 text-[var(--text-secondary)]">
+                  Durasi <strong className="text-[var(--sev-high)]">{liveReport.duration}</strong>
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2 py-0.5 text-[var(--text-secondary)]">
+                  VEL <strong className="text-[var(--text-primary)]">{seismicEnergy.toFixed(1)} mm/s</strong>
+                </span>
+                <span className="rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2 py-0.5 text-[var(--text-secondary)]">
+                  PGA <strong className="text-[var(--text-primary)]">{((activityLevel / 100) * 0.45).toFixed(3)} g</strong>
+                </span>
+                <span className="rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)]">
+                  {phaseName}
+                </span>
+              </>
+            )}
           </div>
         </div>
+      )}
 
-        {/* Telemetry Numbers */}
-        <div className="seismograph__telemetry">
-          {!isBMKGMode && liveReport ? (
-            <>
-              <span className="seismograph__stat">
-                AMP MAKS: <strong style={{ color: '#ff2a5f' }}>{liveReport.amplitude}</strong>
+      {/* Oscilloscope Canvas */}
+      <div className="overflow-hidden rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-2)]">
+        <canvas ref={canvasRef} className={`block w-full ${compactHud ? 'h-[68px]' : 'h-[132px]'}`} />
+      </div>
+
+      {/* Compact VONA Volcanic Ash Summary */}
+      {!compactHud && (!isBMKGMode || isSimulasi || liveReport || isAwas || isSiaga) && (
+        <div className="rounded-lg border border-[var(--sev-high-border)] bg-[var(--sev-high-bg)] p-2.5 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Wind className="h-3.5 w-3.5 text-[var(--sev-high)]" />
+              <span className="font-bold text-[var(--text-primary)]">
+                Sebaran Abu VONA — G. {ashTrajectory.volcanoName}
               </span>
-              <span className="seismograph__stat">
-                DURASI: <strong style={{ color: '#ff9800' }}>{liveReport.duration}</strong>
+              <span className="rounded bg-[var(--sev-high)] px-1.5 py-0.5 font-mono text-[9px] font-bold text-white">
+                {ashTrajectory.vonaColorCode}
               </span>
-              <span className="seismograph__badge" style={{ background: 'rgba(255,87,34,0.15)', color: '#ff7043', border: '1px solid rgba(255,87,34,0.4)' }}>
-                TREMOR ERUPSI
+            </div>
+
+            <div className="flex items-center gap-2 font-mono text-[11px] text-[var(--text-secondary)]">
+              <span className="inline-flex items-center gap-1">
+                <Compass className="h-3 w-3 text-[var(--sev-high)]" />
+                {ashTrajectory.windDirectionCardinal} ({ashTrajectory.windSpeedKts} kt)
               </span>
-            </>
-          ) : (
-            <>
-              <span className="seismograph__stat">
-                VEL: <strong>{seismicEnergy.toFixed(1)} mm/s</strong>
-              </span>
-              <span className="seismograph__stat">
-                PGA: <strong>{((activityLevel / 100) * 0.45).toFixed(3)} g</strong>
-              </span>
-              <span className={`seismograph__badge seismograph__badge--${phaseName.toLowerCase()}`}>
-                {activityLevel > 80 ? 'SATURATED / CLIPPED' : activityLevel > 45 ? 'SURFACE WAVE' : 'AMBIENT NOISE'}
-              </span>
-            </>
+              <button
+                type="button"
+                onClick={() => setShowAshDetails((prev) => !prev)}
+                className="inline-flex items-center gap-1 rounded border border-[var(--sev-high-border)] bg-[var(--surface-1)] px-2 py-0.5 font-sans text-[10px] font-semibold text-[var(--text-primary)]"
+              >
+                {showAshDetails ? 'Tutup VONA' : 'Detail VONA'}
+              </button>
+              {!isBMKGMode && (
+                <button
+                  type="button"
+                  onClick={() => handleAnalyze(activeTarget)}
+                  className="inline-flex items-center gap-1 font-sans text-[10px] font-semibold text-[var(--accent)] hover:underline"
+                >
+                  <span>Analisis PVMBG</span>
+                  <ArrowUpRight className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {showAshDetails && (
+            <div className="mt-2 grid grid-cols-1 gap-2 border-t border-[var(--sev-high-border)] pt-2 sm:grid-cols-3">
+              <div className="rounded border border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-1.5">
+                <div className="text-[10px] text-[var(--text-muted)]">Tinggi Kolom Erupsi</div>
+                <div className="font-mono text-xs font-bold text-[var(--sev-critical)]">
+                  ±{ashTrajectory.plumeHeightMeters.toLocaleString('id-ID')} m dpl
+                </div>
+              </div>
+              <div className="rounded border border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-1.5">
+                <div className="text-[10px] text-[var(--text-muted)]">Radius &amp; Durasi Sebaran</div>
+                <div className="font-mono text-xs font-bold text-[var(--text-primary)]">
+                  {ashTrajectory.hazardRadiusKm} km · {ashTrajectory.ashDispersionDurationEst}
+                </div>
+              </div>
+              <div className="rounded border border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-1.5">
+                <div className="inline-flex items-center gap-1 text-[10px] text-[var(--text-muted)]">
+                  <Plane className="h-3 w-3" /> Koridor Penerbangan
+                </div>
+                <div className="truncate text-xs font-semibold text-[var(--text-primary)]">
+                  {ashTrajectory.affectedAviationRoute}
+                </div>
+              </div>
+            </div>
           )}
-        </div>
-      </div>
-
-      {/* Canvas Waveform Drum */}
-      <div className="seismograph__canvas-wrap" style={{ minHeight: '140px' }}>
-        <canvas ref={canvasRef} className="seismograph__canvas" style={{ height: '140px' }} />
-      </div>
-
-      {/* Contextual Volcanic Signal Caption */}
-      {!isBMKGMode && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            fontSize: '11px',
-            color: 'var(--text-muted)',
-            padding: '6px 10px',
-            background: 'rgba(0, 0, 0, 0.3)',
-            borderRadius: '6px',
-            border: '1px solid var(--border-subtle)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ color: '#ff9800' }}>📡 Sensor:</span>
-            <span>{geo?.sensorType || 'Broadband Güralp CMG-40T'}</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span>Status Kawah: <strong>{liveReport?.visual_ash || 'Aktivitas Normal Terpantau'}</strong></span>
-            <span
-              onClick={() => onInspectSeismogram?.(effectiveInspectionReport)}
-              style={{ color: '#00f2ff', cursor: 'pointer', fontWeight: 700 }}
-            >
-              Lihat Analisis Lengkap ↗
-            </span>
-          </div>
         </div>
       )}
     </div>

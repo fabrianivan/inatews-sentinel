@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="sqBg" x1="6" y1="4" x2="58" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#070d1d" />
+      <stop offset="55%" stop-color="#0d1b35" />
+      <stop offset="100%" stop-color="#083047" />
+    </linearGradient>
+    <linearGradient id="sqRim" x1="32" y1="3" x2="32" y2="61" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.34" />
+      <stop offset="55%" stop-color="#22d3ee" stop-opacity="0.22" />
+      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0.12" />
+    </linearGradient>
+    <radialGradient id="ambientGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(32 27) rotate(90) scale(21)">
+      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.28" />
+      <stop offset="100%" stop-color="#22d3ee" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="ringGrad" x1="20" y1="15" x2="44" y2="39" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#67e8f9" />
+      <stop offset="100%" stop-color="#06b6d4" />
+    </linearGradient>
+    <linearGradient id="wavePulse" x1="12" y1="42" x2="52" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#67e8f9" />
+      <stop offset="45%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#22d3ee" />
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded App Squircle -->
+  <rect x="3" y="3" width="58" height="58" rx="16" fill="url(#sqBg)" />
+  <rect x="3.75" y="3.75" width="56.5" height="56.5" rx="15.25" stroke="url(#sqRim)" stroke-width="1.5" />
+
+  <!-- Subtle Atmospheric Glow -->
+  <circle cx="32" cy="27" r="21" fill="url(#ambientGlow)" />
+
+  <!-- Concentric Tectonic Sonar Rings -->
+  <circle cx="32" cy="27" r="17.5" stroke="#38bdf8" stroke-opacity="0.28" stroke-width="1.6" />
+  <circle cx="32" cy="27" r="11.5" stroke="url(#ringGrad)" stroke-width="3.2" />
+
+  <!-- Coral Crimson Epicenter Core -->
+  <circle cx="32" cy="27" r="6.8" fill="#fb7185" fill-opacity="0.26" />
+  <circle cx="32" cy="27" r="3.8" fill="#fb7185" stroke="#fff1f2" stroke-width="1" />
+
+  <!-- Knockout Gap + Sweeping Seismic-Tsunami Wave -->
+  <path
+    d="M11.5 43.5H20L24.5 34.5L29.5 48.5L34 39C38.5 37.5 43.5 45.5 52.5 42"
+    stroke="#091529"
+    stroke-width="7.2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M11.5 43.5H20L24.5 34.5L29.5 48.5L34 39C38.5 37.5 43.5 45.5 52.5 42"
+    stroke="url(#wavePulse)"
+    stroke-width="3.8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

@@ -3,8 +3,54 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { ChevronDown, ChevronUp, Layers, RotateCcw } from 'lucide-react';
 import type { LifecyclePhase, LiveEvent, RealtimeEarthquakesData, VolcanoEruption } from '@/lib/types';
-import { INDONESIAN_VOLCANOES, findVolcanoLocation, getVolcanicAshTrajectory } from '@/lib/volcanoData';
+import {
+  INDONESIAN_VOLCANOES,
+  buildVolcanoInspectionReport,
+  findVolcanoLocation,
+  getVolcanoReports,
+  getVolcanicAshTrajectory,
+} from '@/lib/volcanoData';
+
+/**
+ * Hide map labels that collide with a higher-priority label so the map stays legible
+ * at national zoom levels. Elements opt in with `data-declutter="<priority>"`.
+ */
+function declutterMapLabels(container: HTMLElement) {
+  // Marker bodies (e.g. volcano circles) are fixed obstacles: never hidden, but labels avoid them.
+  const obstacles = Array.from(container.querySelectorAll<HTMLElement>('[data-declutter-fixed]')).map((el) => ({
+    el,
+    rect: el.getBoundingClientRect(),
+  }));
+  const items = Array.from(container.querySelectorAll<HTMLElement>('[data-declutter]'));
+  items.sort((a, b) => Number(b.dataset.declutter) - Number(a.dataset.declutter));
+  const placed: DOMRect[] = [];
+  const PAD = 2;
+  const hits = (r: DOMRect, p: DOMRect) =>
+    r.left < p.right + PAD && r.right > p.left - PAD && r.top < p.bottom + PAD && r.bottom > p.top - PAD;
+  for (const el of items) {
+    el.style.visibility = '';
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) continue;
+    const collides =
+      placed.some((p) => hits(r, p)) ||
+      obstacles.some((o) => o.rect.width > 0 && !o.el.contains(el) && !el.contains(o.el) && hits(r, o.rect));
+    if (collides) el.style.visibility = 'hidden';
+    else placed.push(r);
+  }
+}
+
+export interface DrillScenarioMapData {
+  id: string;
+  name: string;
+  faultZone: string;
+  magnitude: number;
+  depth: number;
+  lat: number;
+  lon: number;
+  tsunamiHeight: number;
+}
 
 interface MapProps {
   activityLevel?: number;
@@ -16,6 +62,10 @@ interface MapProps {
   focusCoords?: { lat: number; lon: number } | null;
   volcanoes?: VolcanoEruption[];
   selectedVolcano?: string | null;
+  drillScenarioData?: DrillScenarioMapData | null;
+  theme?: 'dark' | 'light';
+  floatingHud?: boolean;
+  className?: string;
   onSelectVolcano?: (name: string) => void;
   onInspectVolcanoSeismogram?: (volcano: VolcanoEruption) => void;
 }
@@ -127,14 +177,24 @@ export default function Map({
   focusCoords,
   volcanoes = [],
   selectedVolcano = null,
+  drillScenarioData = null,
+  theme = 'dark',
+  floatingHud = false,
+  className = '',
   onSelectVolcano,
   onInspectVolcanoSeismogram,
 }: MapProps) {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
+  const darkBaseLayerRef = useRef<L.Layer | null>(null);
+  const lightBaseLayerRef = useRef<L.Layer | null>(null);
+  const basemapModeRef = useRef<'tactical' | 'custom'>('tactical');
   const quakeLayerRef = useRef<L.LayerGroup | null>(null);
   const volcanoLayerRef = useRef<L.LayerGroup | null>(null);
   const ashLayerRef = useRef<L.LayerGroup | null>(null);
+  const drillLayerRef = useRef<L.LayerGroup | null>(null);
+  const waveAnimLayerRef = useRef<L.LayerGroup | null>(null);
+  const lastDrillIdRef = useRef<string | null>(null);
   const sundaLayerRef = useRef<L.LayerGroup | null>(null);
   const javaTrenchLayerRef = useRef<L.LayerGroup | null>(null);
   const paluKoroLayerRef = useRef<L.LayerGroup | null>(null);
@@ -143,7 +203,7 @@ export default function Map({
   const buoyLayerRef = useRef<L.LayerGroup | null>(null);
   const latestMarkerRef = useRef<L.Marker | null>(null);
   const [mouseCoords, setMouseCoords] = useState<string>('0.00°S, 118.00°E');
-  const [isLegendCollapsed, setIsLegendCollapsed] = useState<boolean>(false);
+  const [isLegendCollapsed, setIsLegendCollapsed] = useState<boolean>(true);
   const [activeLayer, setActiveLayer] = useState<{
     sundaMegathrust: boolean;
     javaTrench: boolean;
@@ -175,7 +235,47 @@ export default function Map({
       zoomControl: false,
     });
 
-    L.control.zoom({ position: 'bottomright' }).addTo(map);
+    // Tactical Theme-Synced Basemaps (ESRI Dark/Light Canvas + Reference Labels — zero API key required)
+    const darkMatterLayer = L.layerGroup([
+      L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+        {
+          attribution: '&copy; Esri, HERE, Garmin · BMKG',
+          maxZoom: 16,
+        }
+      ),
+      L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+        {
+          maxZoom: 16,
+        }
+      ),
+    ]);
+
+    const positronLightLayer = L.layerGroup([
+      L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+        {
+          attribution: '&copy; Esri, HERE, Garmin · BMKG',
+          maxZoom: 16,
+        }
+      ),
+      L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+        {
+          maxZoom: 16,
+        }
+      ),
+    ]);
+
+    // Standard OpenStreetMap fallback layer
+    const osmLayer = L.tileLayer(
+      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      {
+        attribution: '&copy; OpenStreetMap contributors · BMKG',
+        maxZoom: 18,
+      }
+    );
 
     // High quality ESRI World Imagery
     const satelliteLayer = L.tileLayer(
@@ -195,18 +295,37 @@ export default function Map({
       }
     );
 
-    satelliteLayer.addTo(map);
+    darkBaseLayerRef.current = darkMatterLayer;
+    lightBaseLayerRef.current = positronLightLayer;
+
+    if (theme === 'light') {
+      positronLightLayer.addTo(map);
+    } else {
+      darkMatterLayer.addTo(map);
+    }
 
     const baseMaps = {
-      '🛰️ Satelit (ESRI)': satelliteLayer,
-      '🌊 Batimetri Oseanografi': oceanLayer,
+      'Peta Gelap Taktis': darkMatterLayer,
+      'Peta Terang Operasional': positronLightLayer,
+      'OpenStreetMap': osmLayer,
+      'Satelit (ESRI)': satelliteLayer,
+      'Batimetri Oseanografi': oceanLayer,
     };
-    L.control.layers(baseMaps, undefined, { position: 'topright' }).addTo(map);
+    L.control.layers(baseMaps, undefined, { position: 'topleft' }).addTo(map);
+    L.control.zoom({ position: 'topleft' }).addTo(map);
+
+    map.on('baselayerchange', (ev) => {
+      if (ev.name === 'Peta Gelap Taktis' || ev.name === 'Peta Terang Operasional') {
+        basemapModeRef.current = 'tactical';
+      } else {
+        basemapModeRef.current = 'custom';
+      }
+    });
 
     // Mouse coordinates tracker
     map.on('mousemove', (e) => {
-      const latStr = `${Math.abs(e.latlng.lat).toFixed(2)}°${e.latlng.lat >= 0 ? 'N' : 'S'}`;
-      const lonStr = `${Math.abs(e.latlng.lng).toFixed(2)}°${e.latlng.lng >= 0 ? 'E' : 'W'}`;
+      const latStr = `${Math.abs(e.latlng.lat).toFixed(2)}°${e.latlng.lat >= 0 ? 'LU' : 'LS'}`;
+      const lonStr = `${Math.abs(e.latlng.lng).toFixed(2)}°${e.latlng.lng >= 0 ? 'BT' : 'BB'}`;
       setMouseCoords(`${latStr}, ${lonStr}`);
     });
 
@@ -216,13 +335,14 @@ export default function Map({
     if (sundaFault) {
       L.polyline(sundaFault.coords, {
         color: sundaFault.color,
-        weight: 4,
+        weight: 3.5,
         opacity: 0.9,
         dashArray: '8, 6',
+        className: 'tectonic-fault-flow',
       }).addTo(sundaLayerRef.current).bindPopup(`
-        <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a;">
-          <strong style="color: ${sundaFault.color}; font-size: 13px;">⚡ ${sundaFault.name}</strong><br/>
-          <span style="font-size: 11px; color: #64748b;">${sundaFault.fullName} — Potensi Megathrust M8.2+</span>
+        <div style="font-family: Inter, sans-serif; padding: 4px;">
+          <strong style="color: ${sundaFault.color}; font-size: 12px;">${sundaFault.name}</strong><br/>
+          <span style="font-size: 11px; opacity: 0.8;">${sundaFault.fullName} — Potensi Megathrust M8.2+</span>
         </div>
       `);
     }
@@ -233,13 +353,14 @@ export default function Map({
     if (javaFault) {
       L.polyline(javaFault.coords, {
         color: javaFault.color,
-        weight: 4,
+        weight: 3.5,
         opacity: 0.9,
         dashArray: '8, 6',
+        className: 'tectonic-fault-flow',
       }).addTo(javaTrenchLayerRef.current).bindPopup(`
-        <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a;">
-          <strong style="color: ${javaFault.color}; font-size: 13px;">⚡ ${javaFault.name}</strong><br/>
-          <span style="font-size: 11px; color: #64748b;">${javaFault.fullName} — Potensi Megathrust M8.8</span>
+        <div style="font-family: Inter, sans-serif; padding: 4px;">
+          <strong style="color: ${javaFault.color}; font-size: 12px;">${javaFault.name}</strong><br/>
+          <span style="font-size: 11px; opacity: 0.8;">${javaFault.fullName} — Potensi Megathrust M8.8</span>
         </div>
       `);
     }
@@ -250,13 +371,14 @@ export default function Map({
     if (paluFault) {
       L.polyline(paluFault.coords, {
         color: paluFault.color,
-        weight: 4,
+        weight: 3.5,
         opacity: 0.9,
         dashArray: '8, 6',
+        className: 'tectonic-fault-flow',
       }).addTo(paluKoroLayerRef.current).bindPopup(`
-        <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a;">
-          <strong style="color: ${paluFault.color}; font-size: 13px;">⚡ ${paluFault.name}</strong><br/>
-          <span style="font-size: 11px; color: #64748b;">${paluFault.fullName} — Sesar Geser Mendatar Aktif</span>
+        <div style="font-family: Inter, sans-serif; padding: 4px;">
+          <strong style="color: ${paluFault.color}; font-size: 12px;">${paluFault.name}</strong><br/>
+          <span style="font-size: 11px; opacity: 0.8;">${paluFault.fullName} — Sesar Geser Mendatar Aktif</span>
         </div>
       `);
     }
@@ -266,13 +388,14 @@ export default function Map({
     FAULT_SYSTEMS.filter((f) => !['sundaMegathrust', 'javaTrench', 'paluKoro'].includes(f.id)).forEach((fault) => {
       L.polyline(fault.coords, {
         color: fault.color,
-        weight: 3,
+        weight: 2.5,
         opacity: 0.75,
         dashArray: '8, 6',
+        className: 'tectonic-fault-flow',
       }).addTo(otherFaultsLayerRef.current!).bindPopup(`
-        <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a;">
-          <strong style="color: ${fault.color}; font-size: 13px;">⚡ ${fault.name}</strong><br/>
-          <span style="font-size: 11px; color: #64748b;">Zona Sesar Tektonik Regional Indonesia</span>
+        <div style="font-family: Inter, sans-serif; padding: 4px;">
+          <strong style="color: ${fault.color}; font-size: 12px;">${fault.name}</strong><br/>
+          <span style="font-size: 11px; opacity: 0.8;">Zona Sesar Tektonik Regional Indonesia</span>
         </div>
       `);
     });
@@ -283,8 +406,8 @@ export default function Map({
       const stIcon = L.divIcon({
         className: 'station-marker',
         html: `
-          <div style="display: flex; align-items: center; gap: 4px; background: rgba(6,10,20,0.88); border: 1px solid #00f2ff; border-radius: 4px; padding: 2px 6px; color: #00f2ff; font-family: monospace; font-size: 10px; font-weight: 700; white-space: nowrap; box-shadow: 0 0 8px rgba(0,242,255,0.35);">
-            <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #00e676;"></span>
+          <div data-declutter="40" style="display: flex; align-items: center; gap: 4px; background: var(--surface-1); border: 1px solid var(--accent-border); border-radius: 4px; padding: 2px 6px; color: var(--text-primary); font-family: monospace; font-size: 10px; font-weight: 700; white-space: nowrap;">
+            <span style="display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--sev-normal);"></span>
             ${st.id}
           </div>
         `,
@@ -295,10 +418,10 @@ export default function Map({
       L.marker(st.pos, { icon: stIcon })
         .addTo(stationLayerRef.current!)
         .bindPopup(`
-          <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a;">
-            <strong style="font-size: 13px; color: #0284c7;">📡 Stasiun BMKG: ${st.id}</strong><br/>
-            <span style="font-size: 11px; color: #475569;">Lokasi: ${st.name}</span><br/>
-            <span style="font-size: 11px; color: #16a34a; font-weight: 600;">Status: ONLINE • 100Hz Real-Time Waveform</span>
+          <div style="font-family: Inter, sans-serif; padding: 4px;">
+            <strong style="font-size: 12px; color: var(--accent);">Stasiun BMKG: ${st.id}</strong><br/>
+            <span style="font-size: 11px; opacity: 0.85;">Lokasi: ${st.name}</span><br/>
+            <span style="font-size: 11px; color: var(--sev-normal); font-weight: 600;">Status: ONLINE • 100 Hz Real-Time</span>
           </div>
         `);
     });
@@ -309,21 +432,22 @@ export default function Map({
       const buoyIcon = L.divIcon({
         className: 'buoy-marker',
         html: `
-          <div style="display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: rgba(6,182,212,0.25); border: 2px solid #06b6d4; box-shadow: 0 0 10px #06b6d4; font-size: 11px;">
-            🌊
+          <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: rgba(34,211,238,0.18); border: 1.8px solid #22d3ee;">
+            <span class="buoy-sonar-ring" style="position: absolute; inset: -3px; border-radius: 50%; border: 1.5px solid #22d3ee;"></span>
+            <span style="width: 5px; height: 5px; border-radius: 50%; background: #67e8f9; box-shadow: 0 0 8px #22d3ee;"></span>
           </div>
         `,
-        iconSize: [22, 22],
-        iconAnchor: [11, 11],
+        iconSize: [18, 18],
+        iconAnchor: [9, 9],
       });
 
       L.marker(buoy.pos, { icon: buoyIcon })
         .addTo(buoyLayerRef.current!)
         .bindPopup(`
-          <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a;">
-            <strong style="font-size: 13px; color: #0891b2;">🌊 ${buoy.id}</strong><br/>
-            <span style="font-size: 11px; color: #475569;">Pelampung Tsunami: ${buoy.name}</span><br/>
-            <span style="font-size: 11px; color: #059669;">Sensor Tekanan Dasar Laut: Normal</span>
+          <div style="font-family: Inter, sans-serif; padding: 4px;">
+            <strong style="font-size: 12px; color: #0ea5e9;">${buoy.id}</strong><br/>
+            <span style="font-size: 11px; opacity: 0.85;">Pelampung Tsunami: ${buoy.name}</span><br/>
+            <span style="font-size: 11px; color: var(--sev-normal); font-weight: 600;">Sensor Tekanan Dasar Laut: Nominal</span>
           </div>
         `);
     });
@@ -334,6 +458,10 @@ export default function Map({
     volcanoLayerRef.current = L.layerGroup().addTo(map);
     // Layer group for volcanic ash dispersion simulation
     ashLayerRef.current = L.layerGroup().addTo(map);
+    // Layer group for Megathrust drill wavefronts & epicenter
+    drillLayerRef.current = L.layerGroup().addTo(map);
+    // Layer group for animated tsunami & live seismic wave propagation
+    waveAnimLayerRef.current = L.layerGroup().addTo(map);
 
     mapRef.current = map;
 
@@ -341,13 +469,52 @@ export default function Map({
     const handleResize = () => map.invalidateSize();
     window.addEventListener('resize', handleResize);
 
+    // Re-run label decluttering whenever the view or the set of markers changes
+    let declutterFrame = 0;
+    const scheduleDeclutter = () => {
+      cancelAnimationFrame(declutterFrame);
+      declutterFrame = requestAnimationFrame(() => declutterMapLabels(map.getContainer()));
+    };
+    map.on('zoomend moveend', scheduleDeclutter);
+    const markerPaneObserver = new MutationObserver(scheduleDeclutter);
+    markerPaneObserver.observe(map.getPane('markerPane')!, { childList: true });
+    scheduleDeclutter();
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && mapContainerRef.current) {
+      resizeObserver = new ResizeObserver(() => {
+        map.invalidateSize();
+      });
+      resizeObserver.observe(mapContainerRef.current);
+    }
+
     return () => {
       clearTimeout(timer);
       window.removeEventListener('resize', handleResize);
+      resizeObserver?.disconnect();
+      markerPaneObserver.disconnect();
+      cancelAnimationFrame(declutterFrame);
+      map.off('zoomend moveend', scheduleDeclutter);
       map.remove();
       mapRef.current = null;
     };
   }, []);
+
+  // 1a. Automatically sync Tactical Basemap with Dark/Light theme toggle
+  useEffect(() => {
+    const map = mapRef.current;
+    const darkLayer = darkBaseLayerRef.current;
+    const lightLayer = lightBaseLayerRef.current;
+    if (!map || !darkLayer || !lightLayer || basemapModeRef.current !== 'tactical') return;
+
+    if (theme === 'light') {
+      if (map.hasLayer(darkLayer)) map.removeLayer(darkLayer);
+      if (!map.hasLayer(lightLayer)) lightLayer.addTo(map);
+    } else {
+      if (map.hasLayer(lightLayer)) map.removeLayer(lightLayer);
+      if (!map.hasLayer(darkLayer)) darkLayer.addTo(map);
+    }
+  }, [theme]);
 
   // 1b. Reactive Layer Toggles for Faults, Stations & Buoys
   useEffect(() => {
@@ -427,17 +594,17 @@ export default function Map({
         });
 
         circle.bindPopup(`
-          <div style="font-family: Inter, sans-serif; padding: 8px; color: #0f172a; min-width: 200px;">
+          <div style="font-family: Inter, sans-serif; padding: 8px; color: var(--text-primary); min-width: 200px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
               <span style="background: ${color}; color: white; padding: 2px 6px; border-radius: 4px; font-weight: 800; font-size: 12px;">
                 M${magnitude.toFixed(1)}
               </span>
-              <span style="font-size: 10px; color: #64748b; font-weight: 700;">BMKG TEWS</span>
+              <span style="font-size: 10px; color: var(--text-muted); font-weight: 700;">BMKG TEWS</span>
             </div>
-            <strong style="font-size: 12px; color: #0f172a;">${faultZone}</strong><br/>
-            <span style="font-size: 11px; color: #475569;">Kedalaman: ${depth} km</span><br/>
-            <span style="font-size: 10px; color: #64748b;">Koordinat: ${lat.toFixed(2)}°, ${lon.toFixed(2)}°</span><br/>
-            <span style="font-size: 9.5px; color: #94a3b8;">Waktu: ${new Date(timestamp).toLocaleString('id-ID')} WIB</span>
+            <strong style="font-size: 12px; color: var(--text-primary);">${faultZone}</strong><br/>
+            <span style="font-size: 11px; color: var(--text-secondary);">Kedalaman: ${depth} km</span><br/>
+            <span style="font-size: 10px; color: var(--text-muted);">Koordinat: ${lat.toFixed(2)}°, ${lon.toFixed(2)}°</span><br/>
+            <span style="font-size: 9.5px; color: var(--text-muted);">Waktu: ${new Date(timestamp).toLocaleString('id-ID')} WIB</span>
           </div>
         `);
 
@@ -468,15 +635,15 @@ export default function Map({
         });
 
         circle.bindPopup(`
-          <div style="font-family: Inter, sans-serif; padding: 6px; color: #0f172a;">
+          <div style="font-family: Inter, sans-serif; padding: 6px; color: var(--text-primary);">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
               <span style="background: #0284c7; color: white; padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 11px;">
                 M${magnitude.toFixed(1)}
               </span>
-              <span style="font-size: 10px; color: #64748b; font-weight: 600;">USGS GEOJSON</span>
+              <span style="font-size: 10px; color: var(--text-muted); font-weight: 600;">USGS GEOJSON</span>
             </div>
-            <strong style="font-size: 12px; color: #0f172a;">${faultZone}</strong><br/>
-            <span style="font-size: 11px; color: #475569;">Depth: ${depth.toFixed(0)} km</span>
+            <strong style="font-size: 12px; color: var(--text-primary);">${faultZone}</strong><br/>
+            <span style="font-size: 11px; color: var(--text-secondary);">Depth: ${depth.toFixed(0)} km</span>
           </div>
         `);
 
@@ -513,7 +680,7 @@ export default function Map({
         const heroIcon = L.divIcon({
           className: 'latest-gempa-hero-icon',
           html: `
-            <div style="position: relative; width: 36px; height: 36px;">
+            <div data-declutter-fixed style="position: relative; width: 36px; height: 36px;">
               <div style="position: absolute; width: 100%; height: 100%; border-radius: 50%; background: rgba(255, 69, 0, 0.45); animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
               <div style="position: absolute; top: 9px; left: 9px; width: 18px; height: 18px; border-radius: 50%; background: #ff4500; border: 2.5px solid white; box-shadow: 0 0 16px #ff4500; display: flex; align-items: center; justify-content: center; color: white; font-size: 9px; font-weight: 800;">
                 ⚡
@@ -526,14 +693,14 @@ export default function Map({
 
         const heroMarker = L.marker([lat, lon], { icon: heroIcon, zIndexOffset: 1000 }).addTo(layer);
         heroMarker.bindPopup(`
-          <div style="font-family: Inter, sans-serif; padding: 8px; color: #0f172a; min-width: 220px;">
+          <div style="font-family: Inter, sans-serif; padding: 8px; color: var(--text-primary); min-width: 220px;">
             <div style="background: #ff4500; color: white; padding: 3px 8px; border-radius: 4px; font-weight: 800; font-size: 12px; margin-bottom: 6px; display: inline-block;">
               GEMPA TERKINI BMKG • M${mag.toFixed(1)}
             </div><br/>
-            <strong style="font-size: 13px; color: #0f172a;">${b.Wilayah}</strong><br/>
-            <span style="font-size: 11px; color: #475569;">Kedalaman: ${b.Kedalaman}</span><br/>
-            <span style="font-size: 11px; color: #16a34a; font-weight: 600;">${b.Potensi}</span><br/>
-            <span style="font-size: 10px; color: #64748b;">${b.Tanggal} • ${b.Jam}</span>
+            <strong style="font-size: 13px; color: var(--text-primary);">${b.Wilayah}</strong><br/>
+            <span style="font-size: 11px; color: var(--text-secondary);">Kedalaman: ${b.Kedalaman}</span><br/>
+            <span style="font-size: 11px; color: var(--sev-normal); font-weight: 600;">${b.Potensi}</span><br/>
+            <span style="font-size: 10px; color: var(--text-muted);">${b.Tanggal} • ${b.Jam}</span>
           </div>
         `);
         latestMarkerRef.current = heroMarker;
@@ -552,10 +719,7 @@ export default function Map({
 
     INDONESIAN_VOLCANOES.forEach((v) => {
       // Find matching live eruption report from PVMBG if available
-      const report = volcanoes.find((e) => {
-        const cleanErup = e.volcano_name.toLowerCase().trim().replace(/^g\.\s*/, '');
-        return v.name.toLowerCase().includes(cleanErup) || cleanErup.includes(v.name.toLowerCase());
-      });
+      const report = getVolcanoReports(v, volcanoes)[0];
 
       const level = report?.alert_level || v.defaultLevel;
       const isAwas = level.includes('AWAS');
@@ -572,7 +736,7 @@ export default function Map({
       const volcanoIcon = L.divIcon({
         className: 'volcano-map-marker',
         html: `
-          <div style="
+          <div data-declutter-fixed style="
             position: relative;
             display: flex;
             align-items: center;
@@ -597,7 +761,7 @@ export default function Map({
                 pointer-events: none;
               "></span>
             ` : ''}
-            <span style="
+            <span data-declutter="${isSelected ? 100 : isAwas ? 90 : isSiaga ? 80 : isWaspada ? 70 : 60}" style="
               position: absolute;
               bottom: -18px;
               white-space: nowrap;
@@ -662,21 +826,19 @@ export default function Map({
           ">
             📊 Tampilkan di Seismograf
           </button>
-          ${report ? `
-            <button id="btn-volcano-inspect-${v.name.replace(/\s+/g, '-')}" style="
-              background: rgba(168, 85, 247, 0.15);
-              color: #7c3aed;
-              border: 1px solid #7c3aed;
-              border-radius: 4px;
-              padding: 5px 10px;
-              font-size: 11px;
-              font-weight: 700;
-              cursor: pointer;
-              text-align: center;
-            ">
-              🔬 Analisis Citra Seismogram
-            </button>
-          ` : ''}
+          <button id="btn-volcano-inspect-${v.name.replace(/\s+/g, '-')}" style="
+            background: rgba(168, 85, 247, 0.15);
+            color: #7c3aed;
+            border: 1px solid #7c3aed;
+            border-radius: 4px;
+            padding: 5px 10px;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            text-align: center;
+          ">
+            🔬 Analisis PVMBG
+          </button>
         </div>
       `;
 
@@ -692,10 +854,11 @@ export default function Map({
           };
         }
 
+        // Every volcano can be analysed: falls back to a routine-monitoring record without a live report
         const btnInspect = document.getElementById(`btn-volcano-inspect-${v.name.replace(/\s+/g, '-')}`);
-        if (btnInspect && report) {
+        if (btnInspect) {
           btnInspect.onclick = () => {
-            onInspectVolcanoSeismogram?.(report);
+            onInspectVolcanoSeismogram?.(buildVolcanoInspectionReport(v, volcanoes));
           };
         }
       });
@@ -857,7 +1020,7 @@ export default function Map({
     }
   }, [selectedVolcano]);
 
-  // 5. Handle external focus request (from LatestQuakeCard)
+  // 5. Handle external focus request (from LatestQuakeCard / OceanPanel)
   useEffect(() => {
     if (!mapRef.current || !focusCoords) return;
     mapRef.current.flyTo([focusCoords.lat, focusCoords.lon], 9, {
@@ -866,6 +1029,301 @@ export default function Map({
     });
   }, [focusCoords]);
 
+  // 6. Render Megathrust drill concentric wavefronts, coastal ETA vectors & animated wave propagation
+  useEffect(() => {
+    const layer = drillLayerRef.current;
+    const animLayer = waveAnimLayerRef.current;
+    const map = mapRef.current;
+    if (!layer || !animLayer || !map) return;
+
+    layer.clearLayers();
+    animLayer.clearLayers();
+
+    let rafId: number | null = null;
+    let lastFrameTime = 0;
+
+    const escapeHtml = (value: string) =>
+      value.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] ?? ch));
+
+    // Resolve live BMKG epicenter coords for baseline shockwave ripple
+    let liveLat: number | null = null;
+    let liveLon: number | null = null;
+    let liveMag = 4.5;
+    if (realQuakes?.latest_bmkg) {
+      const b = realQuakes.latest_bmkg;
+      liveMag = parseFloat(b.Magnitude) || 4.5;
+      if (b.Coordinates) {
+        const parts = b.Coordinates.split(',');
+        if (parts.length === 2) {
+          liveLat = parseFloat(parts[0].trim());
+          liveLon = parseFloat(parts[1].trim());
+        }
+      }
+      if ((liveLat === null || isNaN(liveLat)) && b.Lintang && b.Bujur) {
+        liveLat = parseFloat(b.Lintang);
+        if (b.Lintang.includes('LS')) liveLat = -Math.abs(liveLat);
+        liveLon = parseFloat(b.Bujur);
+        if (b.Bujur.includes('BB')) liveLon = -Math.abs(liveLon);
+      }
+    }
+
+    // Mode A: Full Tsunami & Megathrust Propagation Simulation
+    if (isSimulasi && drillScenarioData) {
+      const { id, name, faultZone, magnitude, depth, lat, lon, tsunamiHeight } = drillScenarioData;
+      const magScale = Math.max(0.85, (magnitude - 6.2) * 0.55);
+      const waveFactor = tsunamiActive ? Math.max(1.15, tsunamiHeight / 10) : 0.75;
+
+      // Coastal Tsunami Arrival Targets per Megathrust Scenario
+      const targetVectors: Record<string, { pos: [number, number]; label: string; etaMin: number }[]> = {
+        'sunda-strait': [
+          { pos: [-6.07, 105.88], label: 'Anyer / Banten', etaMin: 16 },
+          { pos: [-5.75, 105.59], label: 'Kalianda Lampung', etaMin: 14 },
+          { pos: [-6.78, 105.23], label: 'Ujung Kulon', etaMin: 7 },
+          { pos: [-6.99, 106.54], label: 'Palabuhanratu', etaMin: 26 },
+        ],
+        'south-java': [
+          { pos: [-7.74, 109.01], label: 'Cilacap', etaMin: 21 },
+          { pos: [-7.69, 108.65], label: 'Pangandaran', etaMin: 19 },
+          { pos: [-8.02, 110.33], label: 'Parangtritis DIY', etaMin: 24 },
+          { pos: [-8.3, 111.72], label: 'Prigi Trenggalek', etaMin: 29 },
+        ],
+        'mentawai': [
+          { pos: [-1.55, 99.18], label: 'Pulau Siberut', etaMin: 9 },
+          { pos: [-0.96, 100.35], label: 'Kota Padang', etaMin: 18 },
+          { pos: [-3.8, 102.25], label: 'Pesisir Bengkulu', etaMin: 27 },
+          { pos: [1.74, 98.78], label: 'Sibolga', etaMin: 34 },
+        ],
+        'palu-koro': [
+          { pos: [-0.89, 119.86], label: 'Teluk Palu', etaMin: 5 },
+          { pos: [-0.68, 119.74], label: 'Donggala', etaMin: 4 },
+          { pos: [1.04, 120.82], label: 'Toli-Toli', etaMin: 22 },
+          { pos: [-2.68, 118.89], label: 'Mamuju', etaMin: 28 },
+        ],
+      };
+
+      const targets = targetVectors[id] || [];
+
+      // 3 Zona Area Dampak Tektonik & Tsunami (P-Wave Luar Cyan, S-Wave Jingga, Rupture/Tsunami Merah)
+      // Outer P-wave primary impact zone (cyan)
+      L.circle([lat, lon], {
+        radius: 260000 * magScale,
+        color: '#06b6d4',
+        weight: 1.6,
+        opacity: 0.78,
+        dashArray: '6 6',
+        fillColor: '#06b6d4',
+        fillOpacity: 0.06,
+        interactive: false,
+      }).addTo(layer);
+
+      // Middle S-wave strong shaking impact zone (amber/orange)
+      L.circle([lat, lon], {
+        radius: 145000 * magScale,
+        color: '#f97316',
+        weight: 2,
+        opacity: 0.86,
+        dashArray: '4 4',
+        fillColor: '#f59e0b',
+        fillOpacity: 0.13,
+        interactive: false,
+      }).addTo(layer);
+
+      // Inner Rupture & Tsunami generation zone (crimson)
+      L.circle([lat, lon], {
+        radius: 75000 * magScale * waveFactor,
+        color: '#ef4444',
+        weight: 2.5,
+        opacity: 0.95,
+        fillColor: '#ef4444',
+        fillOpacity: tsunamiActive ? 0.25 : 0.15,
+        interactive: false,
+      }).addTo(layer);
+
+      // Animated Tsunami Travel Vectors, Coastal Flood Impact Zones & ETA Badges when tsunamiActive
+      if (tsunamiActive) {
+        targets.forEach((tgt) => {
+          // Coastal danger impact zone halo
+          L.circle(tgt.pos, {
+            radius: 24000,
+            color: '#fb7185',
+            weight: 1.5,
+            opacity: 0.8,
+            fillColor: '#f43f5e',
+            fillOpacity: 0.24,
+            interactive: false,
+          }).addTo(layer);
+
+          L.polyline([[lat, lon], tgt.pos], {
+            color: '#22d3ee',
+            weight: 2.2,
+            opacity: 0.85,
+            dashArray: '10, 6',
+            className: 'tsunami-ray-flow',
+            interactive: false,
+          }).addTo(layer);
+
+          const etaIcon = L.divIcon({
+            className: 'tsunami-eta-badge',
+            html: `
+              <div style="display: inline-flex; align-items: center; gap: 5px; background: rgba(9,15,28,0.88); border: 1.5px solid #fb7185; color: #fff1f2; padding: 2px 7px; border-radius: 999px; font-family: monospace; font-size: 10px; font-weight: 800; white-space: nowrap; box-shadow: 0 0 12px rgba(244,63,94,0.45);">
+                <span style="width: 6px; height: 6px; border-radius: 50%; background: #fb7185; animation: ping 1.4s infinite;"></span>
+                ${escapeHtml(tgt.label)} · ETA ${tgt.etaMin}m
+              </div>
+            `,
+            iconSize: [145, 22],
+            iconAnchor: [72, 11],
+          });
+          L.marker(tgt.pos, { icon: etaIcon, zIndexOffset: 820 }).addTo(layer);
+        });
+      }
+
+      // Epicenter Drill Marker
+      const marker = L.marker([lat, lon], {
+        icon: L.divIcon({
+          className: '',
+          html: '<div class="drill-epicenter-ping"></div>',
+          iconSize: [22, 22],
+          iconAnchor: [11, 11],
+        }),
+        zIndexOffset: 900,
+      });
+
+      marker.bindPopup(
+        `<div style="min-width:210px;font-family:Inter,sans-serif;color:var(--text-primary);padding:4px 2px;">
+          <div style="font-size:11px;font-weight:700;color:#fb7185;text-transform:uppercase;letter-spacing:0.06em;">DRILL MEGATHRUST EPISENTER</div>
+          <div style="font-size:14px;font-weight:700;margin:3px 0;color:var(--text-primary);">${escapeHtml(name)}</div>
+          <div style="font-size:11px;color:var(--text-secondary);margin-bottom:6px;">Zona Sesar: ${escapeHtml(faultZone)}</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px;">
+            <div><strong>Magnitudo:</strong> M${magnitude.toFixed(1)}</div>
+            <div><strong>Kedalaman:</strong> ${depth} km</div>
+            <div><strong>Tsunami Maks:</strong> ${tsunamiHeight.toFixed(1)} m</div>
+            <div><strong>Status:</strong> ${tsunamiActive ? 'GELOMBANG AKTIF' : 'PRECURSOR'}</div>
+          </div>
+        </div>`
+      );
+      marker.addTo(layer);
+
+      if (lastDrillIdRef.current !== id) {
+        lastDrillIdRef.current = id;
+        map.flyTo([lat, lon], 6, { animate: true, duration: 1.3 });
+      }
+
+      // Dynamic Propagating P/S & Tsunami Wavefront Rings
+      const pWaveCircle = L.circle([lat, lon], {
+        radius: 30000,
+        color: '#22d3ee',
+        weight: 1.6,
+        opacity: 0.75,
+        dashArray: '6 6',
+        fillColor: '#22d3ee',
+        fillOpacity: 0.04,
+        interactive: false,
+      }).addTo(animLayer);
+
+      const sWaveCircle = L.circle([lat, lon], {
+        radius: 20000,
+        color: '#fb923c',
+        weight: 2,
+        opacity: 0.8,
+        dashArray: '4 4',
+        fillColor: '#f59e0b',
+        fillOpacity: 0.06,
+        interactive: false,
+      }).addTo(animLayer);
+
+      const tsunamiWaveRings = tsunamiActive
+        ? [0, 1, 2].map(() =>
+            L.circle([lat, lon], {
+              radius: 25000,
+              color: '#fb7185',
+              weight: 2.5,
+              opacity: 0.85,
+              fillColor: '#22d3ee',
+              fillOpacity: 0.14,
+              interactive: false,
+            }).addTo(animLayer)
+          )
+        : [];
+
+      const startTime = performance.now();
+      const animateWavefronts = (now: number) => {
+        if (!document.hidden && now - lastFrameTime >= 36) {
+          lastFrameTime = now;
+          const elapsed = now - startTime;
+
+          // Fast body waves (P & S)
+          const pPhase = (elapsed % 2400) / 2400;
+          const sPhase = ((elapsed + 900) % 2800) / 2800;
+          pWaveCircle.setRadius(25000 + pPhase * 420000 * magScale);
+          pWaveCircle.setStyle({ opacity: Math.max(0.05, 0.78 * (1 - pPhase)) });
+
+          sWaveCircle.setRadius(18000 + sPhase * 280000 * magScale);
+          sWaveCircle.setStyle({ opacity: Math.max(0.08, 0.82 * (1 - sPhase)) });
+
+          // Staggered Ocean Tsunami Crests
+          tsunamiWaveRings.forEach((ring, idx) => {
+            const crestPhase = ((elapsed / 3600) + idx / 3) % 1;
+            const maxRadius = 350000 * magScale * Math.min(1.35, waveFactor);
+            ring.setRadius(22000 + crestPhase * maxRadius);
+            ring.setStyle({
+              opacity: Math.max(0.05, 0.9 * (1 - crestPhase)),
+              fillOpacity: Math.max(0.01, 0.16 * (1 - crestPhase)),
+              weight: Math.max(1.0, 3.0 * (1 - crestPhase * 0.6)),
+              color: crestPhase < 0.35 ? '#fb7185' : '#22d3ee',
+            });
+          });
+        }
+        rafId = requestAnimationFrame(animateWavefronts);
+      };
+      rafId = requestAnimationFrame(animateWavefronts);
+
+      return () => {
+        if (rafId !== null) cancelAnimationFrame(rafId);
+      };
+    }
+
+    lastDrillIdRef.current = null;
+
+    // Mode B: Operasi Live Continuous Seismic Epicenter Shockwave Ripple (plus live tsunami crest if active)
+    if (liveLat !== null && liveLon !== null && !isNaN(liveLat) && !isNaN(liveLon)) {
+      const ringColor = tsunamiActive || liveMag >= 6.0 ? '#fb7185' : liveMag >= 5.0 ? '#fb923c' : '#22d3ee';
+      const maxLiveRadius = tsunamiActive ? 260000 : Math.max(115000, liveMag * 24000);
+      const liveRipples = [0, 1].map(() =>
+        L.circle([liveLat!, liveLon!], {
+          radius: 15000,
+          color: ringColor,
+          weight: tsunamiActive ? 2.4 : 1.6,
+          opacity: 0.75,
+          fillColor: ringColor,
+          fillOpacity: tsunamiActive ? 0.14 : 0.08,
+          interactive: false,
+        }).addTo(animLayer)
+      );
+
+      const startTime = performance.now();
+      const animateLiveRipple = (now: number) => {
+        if (!document.hidden && now - lastFrameTime >= 42) {
+          lastFrameTime = now;
+          const elapsed = now - startTime;
+          liveRipples.forEach((ring, idx) => {
+            const phase = ((elapsed / (tsunamiActive ? 2600 : 3400)) + idx * 0.5) % 1;
+            ring.setRadius(12000 + phase * maxLiveRadius);
+            ring.setStyle({
+              opacity: Math.max(0.02, 0.75 * (1 - phase)),
+              fillOpacity: Math.max(0.01, (tsunamiActive ? 0.16 : 0.08) * (1 - phase)),
+            });
+          });
+        }
+        rafId = requestAnimationFrame(animateLiveRipple);
+      };
+      rafId = requestAnimationFrame(animateLiveRipple);
+
+      return () => {
+        if (rafId !== null) cancelAnimationFrame(rafId);
+      };
+    }
+  }, [isSimulasi, tsunamiActive, drillScenarioData, realQuakes]);
+
   // Reset camera to Indonesia overview
   const handleResetOverview = () => {
     if (!mapRef.current) return;
@@ -873,43 +1331,50 @@ export default function Map({
   };
 
   return (
-    <div className="map-container" style={{ position: 'relative', overflow: 'hidden' }}>
-      {/* Floating Tactical Map Controls */}
-      <div className="map-floating-controls" style={{ position: 'absolute', top: 12, right: 12, zIndex: 1000, display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <div style={{ background: 'rgba(6, 10, 20, 0.75)', backdropFilter: 'blur(8px)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '4px 10px', fontSize: '10px', fontFamily: 'monospace', color: 'var(--text-muted)' }}>
+    <div
+      className={`relative h-full w-full overflow-hidden bg-[var(--surface-canvas)] ${className}`}
+    >
+      {/* Floating Tactical Map Controls (Clear of Top KPI Strip & Right Inspector HUD) */}
+      <div
+        className={`pointer-events-none absolute z-[900] flex items-center gap-2 ${
+          floatingHud ? 'bottom-8 right-3 lg:right-[396px]' : 'right-3 top-3'
+        }`}
+      >
+        <div className="pointer-events-auto hidden rounded-full glass-hud px-3 py-1 font-mono text-[10px] tabular-nums text-[var(--text-secondary)] sm:block">
           {mouseCoords}
         </div>
         <button
-          className="map-floating-btn"
+          type="button"
           onClick={handleResetOverview}
-          title="Kembalikan fokus kamera ke seluruh wilayah kepulauan Indonesia"
+          title="Kembalikan fokus kamera ke seluruh kepulauan Indonesia"
+          className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full glass-hud px-3 py-1 text-[11px] font-semibold text-[var(--text-primary)] transition-opacity hover:opacity-90"
         >
-          <span className="map-floating-btn__icon">⟲</span>
-          <span>Reset Posisi Peta</span>
+          <RotateCcw className="h-3 w-3 text-[var(--accent)]" />
+          <span className="hidden sm:inline">Reset Peta</span>
         </button>
       </div>
 
       {/* Leaflet DOM container */}
       <div
         ref={mapContainerRef}
-        style={{
-          width: '100%',
-          height: '100%',
-          minHeight: '440px',
-          position: 'relative',
-          zIndex: 1,
-        }}
+        className="relative z-[1] h-full min-h-[380px] w-full"
       />
 
-      {/* Floating Tactical Legend Overlay with Toggles (INATEWS · SESAR · EPISENTER) */}
-      <div className="map-hud-legend">
-        <div className="map-hud-legend__header">
-          <div className="map-hud-legend__title">
-            <span>⚡</span>
-            <span>INATEWS · SESAR · EPISENTER</span>
+      {/* Floating Tactical Layer Legend (Collapsible Pill, Clear of Bottom Seismograph Dock) */}
+      <div
+        className={`glass-hud absolute z-[900] rounded-2xl p-2.5 transition-all ${
+          floatingHud
+            ? 'bottom-3 left-3 lg:bottom-[152px] lg:left-4'
+            : 'bottom-3 left-3'
+        } ${isLegendCollapsed ? 'w-auto' : 'w-[244px] max-w-[calc(100%-24px)]'}`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-[10px] font-bold tracking-wider text-[var(--text-primary)] uppercase">
+            <Layers className="h-3.5 w-3.5 text-[var(--accent)]" />
+            <span>LAYER INATEWS</span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span className="map-hud-legend__badge">
+          <div className="flex items-center gap-1.5">
+            <span className="rounded bg-[var(--surface-2)] px-1.5 py-0.5 font-mono text-[9px] font-semibold text-[var(--text-secondary)]">
               {Object.values(activeLayer).filter(Boolean).length}/7
             </span>
             <button
@@ -926,146 +1391,100 @@ export default function Map({
                   buoys: !allActive,
                 });
               }}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: '#38bdf8',
-                fontSize: '10px',
-                cursor: 'pointer',
-                padding: '0 2px',
-                textDecoration: 'underline',
-                fontWeight: 600,
-              }}
-              title="Aktifkan / Sembunyikan Semua Layer"
+              className="text-[10px] font-semibold text-[var(--accent)] hover:underline"
+              title="Aktifkan atau sembunyikan semua layer"
             >
               {Object.values(activeLayer).every(Boolean) ? 'Reset' : 'Semua'}
             </button>
             <button
               type="button"
               onClick={() => setIsLegendCollapsed(!isLegendCollapsed)}
-              style={{
-                background: 'rgba(255, 255, 255, 0.08)',
-                border: '1px solid rgba(255, 255, 255, 0.15)',
-                color: 'var(--text-secondary)',
-                fontSize: '9px',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                padding: '2px 5px',
-                lineHeight: 1,
-              }}
-              title={isLegendCollapsed ? 'Buka Legenda' : 'Ciutkan Legenda'}
+              aria-label={isLegendCollapsed ? 'Buka legenda' : 'Ciutkan legenda'}
+              className="inline-flex h-5 w-5 items-center justify-center rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
             >
-              {isLegendCollapsed ? '▲' : '▼'}
+              {isLegendCollapsed ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
             </button>
           </div>
         </div>
 
         {!isLegendCollapsed && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            {/* 1. Sunda Megathrust (M8.2+) */}
-            <div
-              className={`map-hud-legend__item ${activeLayer.sundaMegathrust ? 'map-hud-legend__item--active' : 'map-hud-legend__item--inactive'}`}
-              onClick={() => setActiveLayer((p) => ({ ...p, sundaMegathrust: !p.sundaMegathrust }))}
-              title="Klik untuk menyembunyikan/menampilkan Sunda Megathrust"
-            >
-              <div className="map-hud-legend__item-left">
-                <span className="legend-line" style={{ color: '#ff2a5f' }}></span>
-                <span style={{ color: activeLayer.sundaMegathrust ? '#fda4af' : 'var(--text-muted)', fontWeight: activeLayer.sundaMegathrust ? 700 : 500 }}>
-                  Sunda Megathrust (M8.2+)
-                </span>
-              </div>
-              <span className="legend-check" style={{ opacity: activeLayer.sundaMegathrust ? 1 : 0 }}>✓</span>
-            </div>
-
-            {/* 2. Java Trench (M8.8) */}
-            <div
-              className={`map-hud-legend__item ${activeLayer.javaTrench ? 'map-hud-legend__item--active' : 'map-hud-legend__item--inactive'}`}
-              onClick={() => setActiveLayer((p) => ({ ...p, javaTrench: !p.javaTrench }))}
-              title="Klik untuk menyembunyikan/menampilkan Java Trench"
-            >
-              <div className="map-hud-legend__item-left">
-                <span className="legend-line" style={{ color: '#ff5722' }}></span>
-                <span style={{ color: activeLayer.javaTrench ? '#fdba74' : 'var(--text-muted)', fontWeight: activeLayer.javaTrench ? 700 : 500 }}>
-                  Java Trench (M8.8)
-                </span>
-              </div>
-              <span className="legend-check" style={{ opacity: activeLayer.javaTrench ? 1 : 0 }}>✓</span>
-            </div>
-
-            {/* 3. Palu-Koro Fault */}
-            <div
-              className={`map-hud-legend__item ${activeLayer.paluKoro ? 'map-hud-legend__item--active' : 'map-hud-legend__item--inactive'}`}
-              onClick={() => setActiveLayer((p) => ({ ...p, paluKoro: !p.paluKoro }))}
-              title="Klik untuk menyembunyikan/menampilkan Palu-Koro Fault"
-            >
-              <div className="map-hud-legend__item-left">
-                <span className="legend-line" style={{ color: '#ffd600' }}></span>
-                <span style={{ color: activeLayer.paluKoro ? '#fef08a' : 'var(--text-muted)', fontWeight: activeLayer.paluKoro ? 700 : 500 }}>
-                  Palu-Koro Fault
-                </span>
-              </div>
-              <span className="legend-check" style={{ opacity: activeLayer.paluKoro ? 1 : 0 }}>✓</span>
-            </div>
-
-            {/* 4. Pos Seismik Gunung Api (PVMBG) */}
-            <div
-              className={`map-hud-legend__item ${activeLayer.volcanoes ? 'map-hud-legend__item--active' : 'map-hud-legend__item--inactive'}`}
-              onClick={() => setActiveLayer((p) => ({ ...p, volcanoes: !p.volcanoes }))}
-              title="Klik untuk menyembunyikan/menampilkan Pos Seismik Gunung Api PVMBG"
-            >
-              <div className="map-hud-legend__item-left">
-                <span className="legend-dot" style={{ background: '#ff5722', color: '#ff5722' }}></span>
-                <span style={{ color: activeLayer.volcanoes ? '#ffedd5' : 'var(--text-muted)', fontWeight: activeLayer.volcanoes ? 700 : 500 }}>
-                  🌋 Pos Seismik Gunung Api (PVMBG)
-                </span>
-              </div>
-              <span className="legend-check" style={{ opacity: activeLayer.volcanoes ? 1 : 0 }}>✓</span>
-            </div>
-
-            {/* 5. Sebaran Abu Vulkanik */}
-            <div
-              className={`map-hud-legend__item ${activeLayer.ash ? 'map-hud-legend__item--active' : 'map-hud-legend__item--inactive'}`}
-              onClick={() => setActiveLayer((p) => ({ ...p, ash: !p.ash }))}
-              title="Klik untuk menyembunyikan/menampilkan Trajektori Sebaran Abu Vulkanik"
-            >
-              <div className="map-hud-legend__item-left">
-                <span className="legend-dot" style={{ background: '#f97316', color: '#f97316' }}></span>
-                <span style={{ color: activeLayer.ash ? '#fed7aa' : 'var(--text-muted)', fontWeight: activeLayer.ash ? 700 : 500 }}>
-                  💨 Sebaran Abu Vulkanik {isSimulasi ? '(Simulasi)' : ''}
-                </span>
-              </div>
-              <span className="legend-check" style={{ opacity: activeLayer.ash ? 1 : 0 }}>✓</span>
-            </div>
-
-            {/* 6. BMKG Broadband Station */}
-            <div
-              className={`map-hud-legend__item ${activeLayer.stations ? 'map-hud-legend__item--active' : 'map-hud-legend__item--inactive'}`}
-              onClick={() => setActiveLayer((p) => ({ ...p, stations: !p.stations }))}
-              title="Klik untuk menyembunyikan/menampilkan Stasiun Seismik Broadband BMKG"
-            >
-              <div className="map-hud-legend__item-left">
-                <span className="legend-dot" style={{ background: '#00f2ff', color: '#00f2ff' }}></span>
-                <span style={{ color: activeLayer.stations ? '#67e8f9' : 'var(--text-muted)', fontWeight: activeLayer.stations ? 700 : 500 }}>
-                  📡 BMKG Broadband Station (LEM, JATS, etc.)
-                </span>
-              </div>
-              <span className="legend-check" style={{ opacity: activeLayer.stations ? 1 : 0 }}>✓</span>
-            </div>
-
-            {/* 7. InaTEWS / IOC Tide Buoys */}
-            <div
-              className={`map-hud-legend__item ${activeLayer.buoys ? 'map-hud-legend__item--active' : 'map-hud-legend__item--inactive'}`}
-              onClick={() => setActiveLayer((p) => ({ ...p, buoys: !p.buoys }))}
-              title="Klik untuk menyembunyikan/menampilkan InaTEWS / IOC Tide Buoys"
-            >
-              <div className="map-hud-legend__item-left">
-                <span className="legend-dot" style={{ background: '#06b6d4', color: '#06b6d4' }}></span>
-                <span style={{ color: activeLayer.buoys ? '#7dd3fc' : 'var(--text-muted)', fontWeight: activeLayer.buoys ? 700 : 500 }}>
-                  🌊 InaTEWS / IOC Tide Buoys
-                </span>
-              </div>
-              <span className="legend-check" style={{ opacity: activeLayer.buoys ? 1 : 0 }}>✓</span>
-            </div>
+          <div className="mt-2 flex flex-col gap-1 border-t border-[var(--border-hairline)] pt-2">
+            {(
+              [
+                {
+                  key: 'sundaMegathrust',
+                  label: 'Megathrust Sunda (M8.2+)',
+                  color: '#ef4444',
+                  kind: 'line',
+                },
+                {
+                  key: 'javaTrench',
+                  label: 'Palung Jawa (M8.8)',
+                  color: '#f97316',
+                  kind: 'line',
+                },
+                {
+                  key: 'paluKoro',
+                  label: 'Sesar Palu-Koro',
+                  color: '#eab308',
+                  kind: 'line',
+                },
+                {
+                  key: 'volcanoes',
+                  label: 'Pos Gunung Api (PVMBG)',
+                  color: '#f97316',
+                  kind: 'dot',
+                },
+                {
+                  key: 'ash',
+                  label: `Sebaran Abu ${isSimulasi ? '(Simulasi)' : '(VONA)'}`,
+                  color: '#fb923c',
+                  kind: 'dot',
+                },
+                {
+                  key: 'stations',
+                  label: 'Stasiun Broadband BMKG',
+                  color: '#38bdf8',
+                  kind: 'dot',
+                },
+                {
+                  key: 'buoys',
+                  label: 'InaTEWS / IOC Tide Buoys',
+                  color: '#06b6d4',
+                  kind: 'dot',
+                },
+              ] as const
+            ).map((item) => {
+              const active = activeLayer[item.key];
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setActiveLayer((p) => ({ ...p, [item.key]: !p[item.key] }))}
+                  className={`flex items-center justify-between rounded px-1.5 py-1 text-left text-[11px] transition-colors hover:bg-[var(--surface-2)] ${
+                    active ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)] opacity-60'
+                  }`}
+                >
+                  <span className="flex items-center gap-2 truncate">
+                    {item.kind === 'line' ? (
+                      <span
+                        className="inline-block h-0.5 w-3 shrink-0 rounded"
+                        style={{ background: item.color }}
+                      />
+                    ) : (
+                      <span
+                        className="inline-block h-2 w-2 shrink-0 rounded-full"
+                        style={{ background: item.color }}
+                      />
+                    )}
+                    <span className="truncate font-medium">{item.label}</span>
+                  </span>
+                  <span className="font-mono text-[10px] font-bold text-[var(--accent)]">
+                    {active ? 'ON' : 'OFF'}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         )}
       </div>

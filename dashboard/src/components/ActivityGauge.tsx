@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
+import { ArrowDownRight, ArrowUpRight, Minus, Zap } from 'lucide-react';
 
 interface ActivityGaugeProps {
   percentage: number;
@@ -8,59 +9,117 @@ interface ActivityGaugeProps {
 }
 
 export default function ActivityGauge({ percentage, trend }: ActivityGaugeProps) {
-  const radius = 70;
+  const radius = 64;
   const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (percentage / 100) * circumference;
+  const clamped = Math.min(100, Math.max(0, percentage));
+  const offset = circumference - (clamped / 100) * circumference;
 
   const mmiInfo = useMemo(() => {
-    if (percentage >= 85) return { roman: 'IX–X', desc: 'DESTRUCTIVE / DISASTROUS', color: '#ff2a5f' };
-    if (percentage >= 70) return { roman: 'VII–VIII', desc: 'SEVERE / VERY STRONG', color: '#ff5722' };
-    if (percentage >= 50) return { roman: 'V–VI', desc: 'STRONG SHAKING', color: '#ff9100' };
-    if (percentage >= 30) return { roman: 'III–IV', desc: 'MODERATE SHAKING', color: '#ffd600' };
-    return { roman: 'I–II', desc: 'MICROSEISMIC / WEAK', color: '#00e676' };
-  }, [percentage]);
+    if (clamped >= 85) {
+      return {
+        roman: 'IX–X',
+        desc: 'DESTRUKTIF / SANGAT KERAS',
+        color: 'var(--sev-critical)',
+      };
+    }
+    if (clamped >= 70) {
+      return {
+        roman: 'VII–VIII',
+        desc: 'GUNCANGAN BERAT',
+        color: 'var(--sev-high)',
+      };
+    }
+    if (clamped >= 50) {
+      return {
+        roman: 'V–VI',
+        desc: 'GUNCANGAN KUAT',
+        color: 'var(--sev-elevated)',
+      };
+    }
+    if (clamped >= 30) {
+      return {
+        roman: 'III–IV',
+        desc: 'GUNCANGAN SEDANG',
+        color: 'var(--accent)',
+      };
+    }
+    return {
+      roman: 'I–II',
+      desc: 'MIKROSEISMIK / LEMAH',
+      color: 'var(--sev-normal)',
+    };
+  }, [clamped]);
 
-  const trendClass = useMemo(() => {
-    if (trend.includes('RAPIDLY') || trend.includes('SURGING') || trend.includes('COLLAPSE')) return 'gauge__trend--rapid';
-    if (trend.includes('INCREASING') || trend === 'HIGH' || trend.includes('WARNING')) return 'gauge__trend--increasing';
-    return 'gauge__trend--stable';
-  }, [trend]);
-
-  const trendIcon = useMemo(() => {
-    if (trend.includes('RAPIDLY') || trend.includes('SURGING')) return '↑↑';
-    if (trend.includes('INCREASING') || trend.includes('WARNING')) return '↑';
-    if (trend.includes('DECREASING')) return '↓';
-    return '→';
-  }, [trend]);
+  const upperTrend = trend.toUpperCase();
+  const isRising =
+    upperTrend.includes('RISING') ||
+    upperTrend.includes('SPIKE') ||
+    upperTrend.includes('CRITICAL') ||
+    upperTrend.includes('ALERT') ||
+    upperTrend.includes('ELEVATED');
+  const isFalling = upperTrend.includes('FALLING') || upperTrend.includes('DECREASING');
 
   return (
-    <div className="gauge">
-      <div className="gauge__circle">
-        <svg className="gauge__svg" viewBox="0 0 160 160">
-          <circle className="gauge__bg" cx="80" cy="80" r={radius} />
+    <div className="flex flex-col items-center justify-center py-2">
+      <div className="relative h-40 w-40">
+        <svg className="h-full w-full -rotate-90" viewBox="0 0 160 160">
           <circle
-            className="gauge__fill"
             cx="80"
             cy="80"
             r={radius}
+            fill="none"
+            stroke="var(--border-hairline)"
+            strokeWidth="10"
+          />
+          <circle
+            cx="80"
+            cy="80"
+            r={radius}
+            fill="none"
             stroke={mmiInfo.color}
+            strokeWidth="10"
+            strokeLinecap="round"
             strokeDasharray={circumference}
             strokeDashoffset={offset}
-            style={{ filter: `drop-shadow(0 0 10px ${mmiInfo.color}60)` }}
+            className="transition-all duration-500"
+            style={{ filter: `drop-shadow(0 0 8px ${mmiInfo.color})` }}
           />
         </svg>
-        <div className="gauge__value">
-          <div className="gauge__percent" style={{ color: mmiInfo.color }}>
+
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+          <span
+            className="font-mono text-2xl font-extrabold tracking-tight"
+            style={{ color: mmiInfo.color }}
+          >
             {mmiInfo.roman}
-          </div>
-          <div className="gauge__label">{mmiInfo.desc}</div>
-          <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '2px' }}>
-            Index: {Math.round(percentage)}%
-          </div>
+          </span>
+          <span className="mt-0.5 max-w-[100px] text-[9px] font-bold leading-tight tracking-wider text-[var(--text-secondary)] uppercase">
+            {mmiInfo.desc}
+          </span>
+          <span className="mt-1 font-mono text-[11px] font-semibold tabular-nums text-[var(--text-muted)]">
+            Indeks {Math.round(clamped)}%
+          </span>
         </div>
       </div>
-      <div className={`gauge__trend ${trendClass}`}>
-        <span>{trendIcon}</span>
+
+      <div
+        className={`mt-2 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-[10px] font-bold tracking-wider uppercase ${
+          isRising
+            ? 'border-[var(--sev-critical-border)] bg-[var(--sev-critical-bg)] text-[var(--sev-critical)]'
+            : isFalling
+            ? 'border-[var(--sev-elevated-border)] bg-[var(--sev-elevated-bg)] text-[var(--sev-elevated)]'
+            : 'border-[var(--sev-normal-border)] bg-[var(--sev-normal-bg)] text-[var(--sev-normal)]'
+        }`}
+      >
+        {upperTrend.includes('SPIKE') ? (
+          <Zap className="h-3 w-3" />
+        ) : isRising ? (
+          <ArrowUpRight className="h-3 w-3" />
+        ) : isFalling ? (
+          <ArrowDownRight className="h-3 w-3" />
+        ) : (
+          <Minus className="h-3 w-3" />
+        )}
         <span>{trend}</span>
       </div>
     </div>

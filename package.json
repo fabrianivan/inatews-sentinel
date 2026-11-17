@@ -12,7 +12,8 @@
     "start": "node scripts/start-all.js",
     "test:backend": "cd backend && go test -v ./...",
     "lint": "cd dashboard && npm run lint",
-    "deploy:flink": "./scripts/deploy-flink.sh"
+    "deploy:flink": "./scripts/deploy-flink.sh",
+    "deliver": "./scripts/deliver.sh"
   },
   "keywords": [
     "confluent",

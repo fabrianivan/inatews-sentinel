@@ -1,128 +1,418 @@
 'use client';
 
+import { useState, useMemo, useEffect, useRef } from 'react';
+import {
+  AlertTriangle,
+  ChevronDown,
+  Crosshair,
+  Search,
+  Waves,
+} from 'lucide-react';
 import type { TsunamiScenario } from '@/lib/types';
+import {
+  SEEDED_IOC_STATIONS,
+  applyTsunamiToStations,
+  type IOCStationReading,
+} from '@/lib/telemetry';
 
 interface OceanPanelProps {
   tsunami: TsunamiScenario | null;
+  stations?: IOCStationReading[];
+  oceanSource?: 'IOC_LIVE' | 'FALLBACK';
+  onFocusMap?: (lat: number, lon: number) => void;
 }
 
-const IOC_STATIONS = [
-  { code: 'sibo', name: 'Sibolga, Sumatra Utara', type: 'Tide Gauge', lat: 1.74, lon: 98.78, status: 'OPERATIONAL', level: '0.82m', trend: 'NORMAL' },
-  { code: 'pada', name: 'Teluk Bayur, Padang', type: 'Tide Gauge', lat: -0.99, lon: 100.37, status: 'OPERATIONAL', level: '1.05m', trend: 'NORMAL' },
-  { code: 'beng', name: 'Pulau Baai, Bengkulu', type: 'Tide Gauge', lat: -3.88, lon: 102.28, status: 'OPERATIONAL', level: '0.94m', trend: 'NORMAL' },
-  { code: 'krui', name: 'Krui, Pesisir Barat Lampung', type: 'Tide Gauge', lat: -5.19, lon: 103.93, status: 'OPERATIONAL', level: '0.78m', trend: 'NORMAL' },
-  { code: 'ciwa', name: 'Ciwandan, Selat Sunda', type: 'Tide Gauge', lat: -6.02, lon: 105.95, status: 'OPERATIONAL', level: '0.65m', trend: 'NORMAL' },
-  { code: 'pelr', name: 'Pelabuhan Ratu, Sukabumi', type: 'Tide Gauge', lat: -6.98, lon: 106.54, status: 'OPERATIONAL', level: '1.12m', trend: 'NORMAL' },
-  { code: 'cila', name: 'Cilacap, Jawa Tengah', type: 'Tide Gauge', lat: -7.74, lon: 109.01, status: 'OPERATIONAL', level: '1.20m', trend: 'NORMAL' },
-  { code: 'prig', name: 'Prigi, Trenggalek', type: 'Tide Gauge', lat: -8.28, lon: 111.72, status: 'OPERATIONAL', level: '0.95m', trend: 'NORMAL' },
-  { code: 'beno', name: 'Benoa, Bali', type: 'Tide Gauge', lat: -8.75, lon: 115.22, status: 'OPERATIONAL', level: '1.45m', trend: 'NORMAL' },
-  { code: 'lemb', name: 'Lembar, Lombok', type: 'Tide Gauge', lat: -8.73, lon: 116.07, status: 'OPERATIONAL', level: '1.18m', trend: 'NORMAL' },
-  { code: 'bima', name: 'Bima, Sumbawa', type: 'Tide Gauge', lat: -8.45, lon: 118.72, status: 'OPERATIONAL', level: '0.88m', trend: 'NORMAL' },
-  { code: 'waig', name: 'Waingapu, Sumba', type: 'Tide Gauge', lat: -9.65, lon: 120.26, status: 'OPERATIONAL', level: '1.02m', trend: 'NORMAL' },
-  { code: 'kupa', name: 'Tenau, Kupang', type: 'Tide Gauge', lat: -10.18, lon: 123.53, status: 'OPERATIONAL', level: '1.30m', trend: 'NORMAL' },
-  { code: 'pntk', name: 'Pontianak, Kalbar', type: 'Tide Gauge', lat: -0.02, lon: 109.33, status: 'OPERATIONAL', level: '0.74m', trend: 'NORMAL' },
-  { code: 'bppn', name: 'Semayang, Balikpapan', type: 'Tide Gauge', lat: -1.27, lon: 116.82, status: 'OPERATIONAL', level: '1.15m', trend: 'NORMAL' },
-  { code: 'toli', name: 'Toli-Toli, Sulteng', type: 'Tide Gauge', lat: 1.05, lon: 120.81, status: 'OPERATIONAL', level: '0.92m', trend: 'NORMAL' },
-  { code: 'bitu', name: 'Bitung, Sulawesi Utara', type: 'Tide Gauge', lat: 1.44, lon: 125.19, status: 'OPERATIONAL', level: '1.35m', trend: 'NORMAL' },
-  { code: 'kend', name: 'Kendari, Sultra', type: 'Tide Gauge', lat: -3.98, lon: 122.58, status: 'OPERATIONAL', level: '0.86m', trend: 'NORMAL' },
-  { code: 'ambo', name: 'Ambon, Maluku', type: 'Tide Gauge', lat: -3.70, lon: 128.18, status: 'OPERATIONAL', level: '1.10m', trend: 'NORMAL' },
-  { code: 'jayp', name: 'Jayapura, Papua', type: 'Tide Gauge', lat: -2.53, lon: 140.71, status: 'OPERATIONAL', level: '0.98m', trend: 'NORMAL' },
-];
+type OceanFilter = 'ALL' | 'ANOMALY' | 'NOMINAL';
 
-export default function OceanPanel({ tsunami }: OceanPanelProps) {
+export default function OceanPanel({
+  tsunami,
+  stations,
+  oceanSource,
+  onFocusMap,
+}: OceanPanelProps) {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<OceanFilter>('ALL');
+  const [showAllRows, setShowAllRows] = useState(false);
+
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const tsunamiStateRef = useRef<{ active: boolean; anomaly: number }>({
+    active: Boolean(tsunami?.active),
+    anomaly: tsunami?.wave_anomaly ?? 0,
+  });
+
+  useEffect(() => {
+    tsunamiStateRef.current = {
+      active: Boolean(tsunami?.active),
+      anomaly: tsunami?.wave_anomaly ?? 0,
+    };
+  }, [tsunami?.active, tsunami?.wave_anomaly]);
+
+  // Live animated ocean tide & tsunami bore wave monitor canvas
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let width = (canvas.width = canvas.parentElement?.clientWidth || 640);
+    const height = (canvas.height = 84);
+
+    const handleResize = () => {
+      if (!canvas || !canvas.parentElement) return;
+      width = canvas.width = canvas.parentElement.clientWidth || 640;
+    };
+    window.addEventListener('resize', handleResize);
+
+    let rafId: number | null = null;
+    let phase = 0;
+
+    const render = () => {
+      if (!document.hidden) {
+        phase += tsunamiStateRef.current.active ? 0.085 : 0.032;
+        const { active, anomaly } = tsunamiStateRef.current;
+
+        const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+        ctx.fillStyle = isLight ? '#f4f8fc' : '#050914';
+        ctx.fillRect(0, 0, width, height);
+
+        // Baseline horizon grid
+        const midY = height * 0.58;
+        ctx.strokeStyle = isLight ? 'rgba(15, 23, 42, 0.07)' : 'rgba(148, 163, 184, 0.09)';
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(0, midY);
+        ctx.lineTo(width, midY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        const amp = active ? Math.min(28, 12 + anomaly * 1.1) : 6.5;
+
+        // Draw Secondary Back Wave
+        ctx.beginPath();
+        for (let x = 0; x <= width; x += 4) {
+          const norm = x / width;
+          const envelope = active ? 0.65 + 0.35 * Math.sin(norm * Math.PI * 2 - phase * 0.6) : 1;
+          const y =
+            midY -
+            Math.sin(x * 0.018 - phase * 0.75) * (amp * 0.55) * envelope -
+            Math.cos(x * 0.042 - phase * 1.1) * (amp * 0.25);
+          if (x === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = active ? 'rgba(251, 113, 133, 0.35)' : 'rgba(34, 211, 238, 0.32)';
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+
+        // Draw Primary Tsunami / Tide Crest Wave with Gradient Fill
+        ctx.beginPath();
+        for (let x = 0; x <= width; x += 3) {
+          const norm = x / width;
+          const surgePeak = active
+            ? Math.exp(-Math.pow((norm - ((phase * 0.14) % 1.2) + 0.1) * 4.5, 2)) * amp * 0.9
+            : 0;
+          const y =
+            midY -
+            Math.sin(x * 0.024 - phase) * (amp * 0.65) -
+            Math.sin(x * 0.055 - phase * 1.4) * (amp * 0.22) -
+            surgePeak;
+          if (x === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = active ? '#fb7185' : '#22d3ee';
+        ctx.lineWidth = active ? 2.4 : 1.8;
+        ctx.stroke();
+
+        ctx.lineTo(width, height);
+        ctx.lineTo(0, height);
+        ctx.closePath();
+
+        const grad = ctx.createLinearGradient(0, 8, 0, height);
+        if (active) {
+          grad.addColorStop(0, 'rgba(251, 113, 133, 0.34)');
+          grad.addColorStop(1, 'rgba(251, 113, 133, 0.02)');
+        } else {
+          grad.addColorStop(0, 'rgba(34, 211, 238, 0.26)');
+          grad.addColorStop(1, 'rgba(34, 211, 238, 0.02)');
+        }
+        ctx.fillStyle = grad;
+        ctx.fill();
+      }
+      rafId = requestAnimationFrame(render);
+    };
+
+    rafId = requestAnimationFrame(render);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
+  }, []);
+
+  const baseStations = stations && stations.length > 0 ? stations : SEEDED_IOC_STATIONS;
+
+  const computedStations = useMemo(
+    () => applyTsunamiToStations(baseStations, tsunami),
+    [baseStations, tsunami]
+  );
+
+  const anomalyCount = useMemo(
+    () => computedStations.filter((st) => st.isAnomaly).length,
+    [computedStations]
+  );
+
+  const liveFeedCount = useMemo(
+    () => baseStations.filter((st) => st.source === 'IOC_LIVE').length,
+    [baseStations]
+  );
+
+  const filteredStations = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return computedStations
+      .filter((st) => {
+        if (statusFilter === 'ANOMALY' && !st.isAnomaly) return false;
+        if (statusFilter === 'NOMINAL' && st.isAnomaly) return false;
+        if (!q) return true;
+        return (
+          st.code.toLowerCase().includes(q) ||
+          st.name.toLowerCase().includes(q) ||
+          st.type.toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => Number(b.isAnomaly) - Number(a.isAnomaly));
+  }, [computedStations, searchQuery, statusFilter]);
+
+  const displayedStations =
+    searchQuery.trim() || statusFilter !== 'ALL' || showAllRows
+      ? filteredStations
+      : filteredStations.slice(0, 7);
+
   return (
-    <div className="ocean-panel">
-      {/* Header Info */}
-      <div className="card ocean-header-card">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div className="ocean-header-card__icon-wrap">
-            <span style={{ fontSize: '28px' }}>🌊</span>
+    <div className="matte-card overflow-hidden p-5 sm:p-6">
+      {/* Header Summary */}
+      <div className="flex flex-col justify-between gap-4 border-b border-[var(--border-hairline)] pb-5 lg:flex-row lg:items-center">
+        <div>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="inline-flex items-center gap-1.5 text-sm font-bold text-[var(--text-primary)]">
+              <Waves className="h-4 w-4 text-[var(--accent)]" />
+              Pemantauan Muka Air Laut (IOC UNESCO &amp; DART)
+            </span>
+            <span className="rounded-full bg-[var(--sev-normal-bg)] px-2.5 py-0.5 font-mono text-[10px] font-bold text-[var(--sev-normal)]">
+              {oceanSource === 'IOC_LIVE' || liveFeedCount > 0
+                ? `IOC LIVE · ${liveFeedCount} STASIUN`
+                : 'JARINGAN STANDBY'}
+            </span>
           </div>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <h2 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)' }}>
-                InaTEWS & IOC UNESCO Ocean Telemetry Network
-              </h2>
-              <span className="card__badge card__badge--live">LIVE REAL-TIME FEED</span>
-            </div>
-            <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-              Pemantauan muka air laut kontinyu dari stasiun pasang surut IOC UNESCO dan InaTEWS Deep-ocean Assessment and Reporting of Tsunamis (DART) Buoys di sepanjang zona subduksi aktif Indonesia.
-            </p>
-          </div>
+          <p className="mt-1 text-xs text-[var(--text-secondary)]">
+            Deteksi anomali kenaikan gelombang pesisir dan verifikasi propagasi tsunami Nusantara.
+          </p>
         </div>
 
-        <div className="ocean-stats-grid">
-          <div className="ocean-stat-box">
-            <span className="ocean-stat-box__label">TOTAL STASIUN PASUT</span>
-            <span className="ocean-stat-box__val">34 Stasiun</span>
+        <div className="grid grid-cols-3 divide-x divide-[var(--border-hairline)] lg:min-w-[380px]">
+          <div className="pr-4">
+            <div className="text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+              Total Pasut
+            </div>
+            <div className="font-display mt-0.5 text-2xl font-bold tabular-nums text-[var(--text-primary)]">
+              {baseStations.length}
+            </div>
           </div>
-          <div className="ocean-stat-box">
-            <span className="ocean-stat-box__label">DART BUOYS AKTIF</span>
-            <span className="ocean-stat-box__val">8 Buoys</span>
-          </div>
-          <div className="ocean-stat-box">
-            <span className="ocean-stat-box__label">STATUS TSUNAMI</span>
-            <span
-              className="ocean-stat-box__val"
-              style={{
-                color: tsunami?.active ? 'var(--status-critical)' : 'var(--status-normal)',
-              }}
+          <div className="px-4">
+            <div className="text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+              Anomali
+            </div>
+            <div
+              className={`font-display mt-0.5 text-2xl font-bold tabular-nums ${
+                anomalyCount > 0 ? 'text-[var(--sev-critical)]' : 'text-[var(--sev-normal)]'
+              }`}
             >
-              {tsunami?.active ? '🚨 ANOMALI GELOMBANG' : '✓ AMAN (NOMINAL)'}
-            </span>
+              {anomalyCount}
+            </div>
+          </div>
+          <div className="pl-4">
+            <div className="text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
+              Status Tsunami
+            </div>
+            <div
+              className={`mt-1.5 font-mono text-xs font-bold ${
+                tsunami?.active ? 'text-[var(--sev-critical)]' : 'text-[var(--sev-normal)]'
+              }`}
+            >
+              {tsunami?.active ? 'GELOMBANG AKTIF' : 'AMAN'}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Tide Gauge Station Table */}
-      <div className="card">
-        <div className="card__header">
-          <span className="card__title">
-            <span className="card__title-icon">📊</span>
-            Katalog Stasiun Pemantau Pasang Surut Air Laut (IOC Sea Level Station Monitoring)
+      {/* Live Animated Tide & Tsunami Surge Waveform Strip */}
+      <div className="mt-4 overflow-hidden rounded-xl border border-[var(--border-hairline)]">
+        <div className="flex items-center justify-between bg-[var(--surface-subtle)] px-3.5 py-1.5 font-mono text-[10px]">
+          <span className="inline-flex items-center gap-2 font-bold text-[var(--text-secondary)]">
+            <span
+              className={`h-2 w-2 rounded-full ${
+                tsunami?.active ? 'animate-ping bg-[var(--sev-critical)]' : 'bg-[var(--accent)]'
+              }`}
+            />
+            PROGRESI PROFIL GELOMBANG PASUT &amp; DART BUOY
           </span>
-          <span className="card__badge card__badge--neutral">34 STASIUN AKTIF</span>
+          <span
+            className={`font-bold ${
+              tsunami?.active ? 'text-[var(--sev-critical)]' : 'text-[var(--accent)]'
+            }`}
+          >
+            {tsunami?.active
+              ? `LONJAKAN +${(tsunami.wave_anomaly ?? 0).toFixed(2)}m · PROPAGASI AKTIF`
+              : 'HARMONIK PASUT NOMINAL'}
+          </span>
+        </div>
+        <canvas ref={canvasRef} className="block h-[84px] w-full" />
+      </div>
+
+      {/* Filter & Search Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 py-4">
+        <div className="relative min-w-[220px] flex-1 sm:max-w-xs">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Cari pelabuhan, pulau, atau kode..."
+            aria-label="Cari stasiun pasang surut"
+            className="w-full rounded-full border border-[var(--border-hairline)] bg-[var(--surface-2)] py-1.5 pl-9 pr-3 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent-border)]"
+          />
         </div>
 
-        <div style={{ overflowX: 'auto' }}>
-          <table className="ocean-table">
-            <thead>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {(
+            [
+              { id: 'ALL', label: `Semua (${baseStations.length})` },
+              { id: 'ANOMALY', label: `Anomali (${anomalyCount})` },
+              { id: 'NOMINAL', label: `Nominal (${baseStations.length - anomalyCount})` },
+            ] as const
+          ).map((btn) => (
+            <button
+              key={btn.id}
+              type="button"
+              onClick={() => setStatusFilter(btn.id)}
+              className={`rounded-full px-3 py-1 text-[11px] font-semibold transition-colors ${
+                statusFilter === btn.id
+                  ? 'bg-[var(--accent-strong)] text-white'
+                  : 'bg-[var(--surface-2)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              {btn.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-left text-xs">
+          <thead>
+            <tr className="border-b border-[var(--border-hairline)] font-mono text-[10px] font-semibold text-[var(--text-muted)] uppercase">
+              <th className="py-2.5 pr-4">Kode</th>
+              <th className="py-2.5 pr-4">Lokasi Stasiun</th>
+              <th className="py-2.5 pr-4">Muka Air</th>
+              <th className="py-2.5 pr-4">Anomali</th>
+              <th className="py-2.5 pr-4">Status</th>
+              {onFocusMap && <th className="py-2.5 text-right">Peta</th>}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[var(--border-hairline)]">
+            {displayedStations.length === 0 ? (
               <tr>
-                <th>KODE</th>
-                <th>LOKASI STASIUN</th>
-                <th>TIPE SENSOR</th>
-                <th>KOORDINAT</th>
-                <th>MUKA AIR LAUT</th>
-                <th>TREN ANOMALI</th>
-                <th>STATUS NETWORK</th>
+                <td
+                  colSpan={onFocusMap ? 6 : 5}
+                  className="py-8 text-center text-xs text-[var(--text-muted)]"
+                >
+                  Tidak ada stasiun yang sesuai filter pencarian.
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {IOC_STATIONS.map((st) => (
-                <tr key={st.code}>
-                  <td style={{ fontFamily: 'monospace', fontWeight: 700, color: '#00f2ff' }}>{st.code.toUpperCase()}</td>
-                  <td style={{ fontWeight: 600 }}>{st.name}</td>
-                  <td><span className="dash-table-chip">{st.type}</span></td>
-                  <td style={{ color: 'var(--text-muted)', fontSize: '11px', fontFamily: 'monospace' }}>
-                    {st.lat.toFixed(2)}, {st.lon.toFixed(2)}
+            ) : (
+              displayedStations.map((st) => (
+                <tr
+                  key={st.code}
+                  className={
+                    st.isAnomaly
+                      ? 'bg-[var(--sev-critical-bg)]'
+                      : 'hover:bg-[var(--surface-2)]/70'
+                  }
+                >
+                  <td className="py-2.5 pr-4 font-mono font-bold text-[var(--accent)]">
+                    {st.code.toUpperCase()}
                   </td>
-                  <td style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{st.level}</td>
-                  <td>
-                    <span style={{ color: 'var(--status-normal)', fontWeight: 600, fontSize: '11px' }}>
-                      ● {st.trend}
-                    </span>
+                  <td className="py-2.5 pr-4">
+                    <div className="font-medium text-[var(--text-primary)]">{st.name}</div>
+                    <div className="font-mono text-[10px] text-[var(--text-muted)] tabular-nums">
+                      {st.type.toUpperCase()} · {st.lat.toFixed(2)}, {st.lon.toFixed(2)}
+                    </div>
                   </td>
-                  <td>
-                    <span className="dash-table-badge dash-table-badge--live">
+                  <td
+                    className={`py-2.5 pr-4 font-mono font-bold tabular-nums ${
+                      st.isAnomaly ? 'text-[var(--sev-critical)]' : 'text-[var(--text-primary)]'
+                    }`}
+                  >
+                    {st.level}
+                  </td>
+                  <td
+                    className={`py-2.5 pr-4 font-mono font-semibold tabular-nums ${
+                      st.isAnomaly ? 'text-[var(--sev-critical)]' : 'text-[var(--text-muted)]'
+                    }`}
+                  >
+                    {st.anomaly}
+                  </td>
+                  <td className="py-2.5 pr-4">
+                    <span
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-mono text-[10px] font-bold ${
+                        st.isAnomaly
+                          ? 'bg-[var(--sev-critical-bg)] text-[var(--sev-critical)]'
+                          : 'bg-[var(--sev-normal-bg)] text-[var(--sev-normal)]'
+                      }`}
+                    >
+                      {st.isAnomaly && (
+                        <AlertTriangle className="h-3 w-3 animate-pulse" />
+                      )}
                       {st.status}
                     </span>
                   </td>
+                  {onFocusMap && (
+                    <td className="py-2.5 text-right">
+                      <button
+                        type="button"
+                        onClick={() => onFocusMap(st.lat, st.lon)}
+                        className="inline-flex items-center gap-1 rounded-full bg-[var(--surface-2)] px-2.5 py-1 text-[11px] font-semibold text-[var(--accent)] hover:bg-[var(--surface-3)]"
+                        title={`Fokuskan peta ke ${st.name}`}
+                      >
+                        <Crosshair className="h-3 w-3" />
+                        <span>Lihat</span>
+                      </button>
+                    </td>
+                  )}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
+
+      {/* Expand Toggle */}
+      {!searchQuery.trim() && statusFilter === 'ALL' && filteredStations.length > 7 && (
+        <div className="mt-4 flex justify-center border-t border-[var(--border-hairline)] pt-3">
+          <button
+            type="button"
+            onClick={() => setShowAllRows((prev) => !prev)}
+            className="inline-flex items-center gap-1.5 rounded-full bg-[var(--surface-2)] px-4 py-1.5 text-xs font-semibold text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+          >
+            <span>
+              {showAllRows
+                ? 'Ringkas daftar pasut'
+                : `Tampilkan seluruh ${filteredStations.length} stasiun IOC UNESCO`}
+            </span>
+            <ChevronDown
+              className={`h-3.5 w-3.5 transition-transform ${showAllRows ? 'rotate-180' : ''}`}
+            />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

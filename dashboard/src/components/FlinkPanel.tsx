@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { ArrowRight, Cpu, Database, GitBranch, Sparkles, Workflow } from 'lucide-react';
 import type { ActivityIndex, SystemStatus } from '@/lib/types';
 
 interface FlinkPanelProps {
@@ -8,413 +8,188 @@ interface FlinkPanelProps {
   status: SystemStatus | null;
 }
 
-const FLINK_QUERIES = [
-  {
-    id: 'create_views',
-    name: '01_create_tables.sql (Source Views)',
-    description: 'Mendefinisikan Flink SQL Source Views di atas inferred topics gempa.* Confluent Cloud dengan parsing payload JSON dan event-time $rowtime.',
-    sql: `-- Run in Confluent Cloud Flink SQL workspace.
--- In Confluent Cloud, topics are automatically registered as inferred tables.
--- These views parse incoming JSON payloads into typed relational schemas with $rowtime.
-
-CREATE VIEW IF NOT EXISTS seismic_events AS
-SELECT 
-    JSON_VALUE(MAKE_VALID_UTF8(val), '$.type') AS \`type\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.magnitude') AS DOUBLE) AS \`magnitude\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.depth') AS DOUBLE) AS \`depth\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.frequency') AS DOUBLE) AS \`frequency\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.count') AS INT) AS \`count\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.latitude') AS DOUBLE) AS \`latitude\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.longitude') AS DOUBLE) AS \`longitude\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.mmi') AS INT) AS \`mmi\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.pga') AS DOUBLE) AS \`pga\`,
-    JSON_VALUE(MAKE_VALID_UTF8(val), '$.fault_zone') AS \`fault_zone\`,
-    $rowtime AS \`timestamp\`
-FROM \`gempa.seismic\`;
-
-CREATE VIEW IF NOT EXISTS station_events AS
-SELECT 
-    JSON_VALUE(MAKE_VALID_UTF8(val), '$.type') AS \`type\`,
-    JSON_VALUE(MAKE_VALID_UTF8(val), '$.station_id') AS \`station_id\`,
-    JSON_VALUE(MAKE_VALID_UTF8(val), '$.station_name') AS \`station_name\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.latitude') AS DOUBLE) AS \`latitude\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.longitude') AS DOUBLE) AS \`longitude\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.signal_quality') AS DOUBLE) AS \`signal_quality\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.p_wave_arrival') AS DOUBLE) AS \`p_wave_arrival\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.s_wave_arrival') AS DOUBLE) AS \`s_wave_arrival\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.pga_recorded') AS DOUBLE) AS \`pga_recorded\`,
-    JSON_VALUE(MAKE_VALID_UTF8(val), '$.status') AS \`status\`,
-    $rowtime AS \`timestamp\`
-FROM \`gempa.stations\`;
-
-CREATE VIEW IF NOT EXISTS ocean_events AS
-SELECT 
-    JSON_VALUE(MAKE_VALID_UTF8(val), '$.type') AS \`type\`,
-    JSON_VALUE(MAKE_VALID_UTF8(val), '$.sensor_id') AS \`sensor_id\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.sea_level') AS DOUBLE) AS \`sea_level\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.wave_height') AS DOUBLE) AS \`wave_height\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.tsunami_sensor_reading') AS DOUBLE) AS \`tsunami_sensor_reading\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.buoy_data') AS DOUBLE) AS \`buoy_data\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.wave_eta') AS INT) AS \`wave_eta\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.latitude') AS DOUBLE) AS \`latitude\`,
-    CAST(JSON_VALUE(MAKE_VALID_UTF8(val), '$.longitude') AS DOUBLE) AS \`longitude\`,
-    $rowtime AS \`timestamp\`
-FROM \`gempa.tsunami\`;
-
--- 8. Unified Multi-Sensor Telemetry
-CREATE VIEW IF NOT EXISTS telemetry_events AS
-SELECT \`timestamp\`, 'seismic' AS event_source, magnitude, pga, CAST(NULL AS DOUBLE) AS pga_recorded, CAST(NULL AS DOUBLE) AS coseismic_slip, CAST(NULL AS DOUBLE) AS wave_height FROM seismic_events
-UNION ALL
-SELECT \`timestamp\`, 'station' AS event_source, CAST(NULL AS DOUBLE) AS magnitude, CAST(NULL AS DOUBLE) AS pga, pga_recorded, CAST(NULL AS DOUBLE) AS coseismic_slip, CAST(NULL AS DOUBLE) AS wave_height FROM station_events
-UNION ALL
-SELECT \`timestamp\`, 'satellite' AS event_source, CAST(NULL AS DOUBLE) AS magnitude, CAST(NULL AS DOUBLE) AS pga, CAST(NULL AS DOUBLE) AS pga_recorded, coseismic_slip, CAST(NULL AS DOUBLE) AS wave_height FROM satellite_events
-UNION ALL
-SELECT \`timestamp\`, 'ocean' AS event_source, CAST(NULL AS DOUBLE) AS magnitude, CAST(NULL AS DOUBLE) AS pga, CAST(NULL AS DOUBLE) AS pga_recorded, CAST(NULL AS DOUBLE) AS coseismic_slip, wave_height FROM ocean_events;`,
-  },
-  {
-    id: 'activity_index',
-    name: '02_activity_index.sql (Star Query)',
-    description: 'Menghitung Indeks Intensitas Seismik Nasional secara kontinyu menggunakan Window TVF 1 menit dengan bobot multi-sensor dan sink langsung ke Confluent Cloud.',
-    sql: `-- Computes the real-time National Seismic Intensity Index
--- using 1-minute tumbling windows over BMKG station telemetry & seismic events.
--- Sinks JSON payloads directly to Confluent Cloud topic gempa.intensity_index.
-
-INSERT INTO \`gempa.intensity_index\` (\`key\`, \`val\`)
-SELECT
-    CAST('intensity' AS BYTES) AS \`key\`,
-    CAST(
-        JSON_OBJECT(
-            'overall_percentage' VALUE overall_percentage,
-            'seismic_change' VALUE seismic_change,
-            'tremor_change' VALUE tremor_change,
-            'deformation_trend' VALUE deformation_trend,
-            'thermal_trend' VALUE thermal_trend,
-            'trend_direction' VALUE trend_direction,
-            'earthquake_count' VALUE earthquake_count,
-            'avg_magnitude' VALUE avg_magnitude,
-            'max_magnitude' VALUE max_magnitude,
-            'timestamp' VALUE DATE_FORMAT(\`timestamp\`, 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''')
-        ) AS BYTES
-    ) AS \`val\`
-FROM (
-    SELECT
-        -- Weighted seismic intensity formula:
-        -- 40% magnitude/energy + 35% station PGA + 15% InSAR coseismic slip + 10% tsunami wave anomaly
-        CASE 
-            WHEN (
-                (COALESCE(MAX(magnitude), 1.0) / 9.5 * 40.0) +
-                (COALESCE(AVG(pga_recorded), 0.0) / 0.5 * 35.0) +
-                (COALESCE(MAX(coseismic_slip), 0.0) / 5.0 * 15.0) +
-                (COALESCE(MAX(wave_height), 0.0) / 10.0 * 10.0)
-            ) > 100.0 THEN 100.0
-            ELSE (
-                (COALESCE(MAX(magnitude), 1.0) / 9.5 * 40.0) +
-                (COALESCE(AVG(pga_recorded), 0.0) / 0.5 * 35.0) +
-                (COALESCE(MAX(coseismic_slip), 0.0) / 5.0 * 15.0) +
-                (COALESCE(MAX(wave_height), 0.0) / 10.0 * 10.0)
-            )
-        END AS overall_percentage,
-        
-        COALESCE(AVG(pga) * 200.0, 0.0) AS seismic_change,
-        COALESCE(AVG(pga_recorded) * 100.0, 0.0) AS tremor_change,
-        
-        CASE 
-            WHEN COALESCE(MAX(coseismic_slip), 0.0) > 2.0 THEN 'MAJOR FAULT RUPTURE'
-            WHEN COALESCE(MAX(coseismic_slip), 0.0) > 0.5 THEN 'COSEISMIC DISPLACEMENT'
-            ELSE 'STABLE'
-        END AS deformation_trend,
-        
-        'STABLE' AS thermal_trend,
-        
-        CASE 
-            WHEN COALESCE(MAX(magnitude), 0.0) >= 8.0 THEN 'MEGATHRUST RUPTURE DETECTED'
-            WHEN COALESCE(MAX(magnitude), 0.0) >= 6.5 THEN 'MAJOR SHAKING'
-            WHEN COALESCE(MAX(magnitude), 0.0) >= 5.0 THEN 'MODERATE EVENT'
-            ELSE 'STABLE'
-        END AS trend_direction,
-        
-        COALESCE(COUNT(CASE WHEN event_source = 'seismic' THEN 1 END), 0) AS earthquake_count,
-        COALESCE(AVG(magnitude), 0.0) AS avg_magnitude,
-        COALESCE(MAX(magnitude), 0.0) AS max_magnitude,
-        window_end AS \`timestamp\`
-    FROM TABLE(
-        TUMBLE(TABLE telemetry_events, DESCRIPTOR(\`timestamp\`), INTERVAL '1' MINUTE)
-    )
-    GROUP BY window_start, window_end
-);`,
-  },
-  {
-    id: 'correlated_alerts',
-    name: '03_correlated_alerts.sql (Multi-Indicator Join)',
-    description: 'Mendeteksi lonjakan anomali simultan lintas domain (seismik + PGA stasiun + deformasi satelit InSAR + buoy laut) dalam window 2 menit.',
-    sql: `-- Detects when multiple independent indicators change simultaneously.
--- Sinks JSON alerts directly to Confluent Cloud topic gempa.correlated_alerts.
-
-INSERT INTO \`gempa.correlated_alerts\` (\`key\`, \`val\`)
-SELECT
-    CAST('alert' AS BYTES) AS \`key\`,
-    CAST(
-        JSON_OBJECT(
-            'alert_level' VALUE alert_level,
-            'correlated_indicators' VALUE correlated_indicators,
-            'time_window' VALUE time_window,
-            'description' VALUE description,
-            'timestamp' VALUE DATE_FORMAT(\`timestamp\`, 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''')
-        ) AS BYTES
-    ) AS \`val\`
-FROM (
-    SELECT
-        CASE 
-            WHEN indicator_count >= 3 THEN 'CRITICAL'
-            WHEN indicator_count >= 2 THEN 'HIGH'
-            ELSE 'ELEVATED'
-        END AS alert_level,
-        
-        CASE 
-            WHEN max_mag >= 7.0 AND max_pga >= 0.15 AND max_slip >= 1.0 AND max_wave >= 2.0
-                THEN JSON_ARRAY('Seismic Alert (M>=7.0)', 'Station PGA Surge (>=0.15g)', 'InSAR Fault Slip (>=1.0m)', 'Tsunami Wave Surge (>=2.0m)')
-            WHEN max_mag >= 7.0 AND max_pga >= 0.15 AND max_wave >= 2.0
-                THEN JSON_ARRAY('Seismic Alert (M>=7.0)', 'Station PGA Surge (>=0.15g)', 'Tsunami Wave Surge (>=2.0m)')
-            WHEN max_mag >= 7.0 AND max_pga >= 0.15 AND max_slip >= 1.0
-                THEN JSON_ARRAY('Seismic Alert (M>=7.0)', 'Station PGA Surge (>=0.15g)', 'InSAR Fault Slip (>=1.0m)')
-            WHEN max_mag >= 7.0 AND max_wave >= 2.0
-                THEN JSON_ARRAY('Seismic Alert (M>=7.0)', 'Tsunami Wave Surge (>=2.0m)')
-            WHEN max_mag >= 7.0 AND max_slip >= 1.0
-                THEN JSON_ARRAY('Seismic Alert (M>=7.0)', 'InSAR Fault Slip (>=1.0m)')
-            WHEN max_pga >= 0.15 AND max_wave >= 2.0
-                THEN JSON_ARRAY('Station PGA Surge (>=0.15g)', 'Tsunami Wave Surge (>=2.0m)')
-            WHEN max_pga >= 0.15 AND max_slip >= 1.0
-                THEN JSON_ARRAY('Station PGA Surge (>=0.15g)', 'InSAR Fault Slip (>=1.0m)')
-            ELSE JSON_ARRAY('Seismic Precursor', 'Station Network Acceleration')
-        END AS correlated_indicators,
-        
-        CAST(window_start AS STRING) || ' to ' || CAST(window_end AS STRING) AS time_window,
-        
-        CASE 
-            WHEN indicator_count >= 3 THEN 'CRITICAL: Multiple independent seismic, geodetic, and ocean indicators confirm major megathrust event. Immediate evacuation recommended.'
-            WHEN indicator_count >= 2 THEN 'HIGH: Co-seismic slip and severe ground acceleration detected simultaneously across regional network.'
-            ELSE 'ELEVATED: Precursor earthquake swarm and ground acceleration increase.'
-        END AS description,
-        
-        window_end AS \`timestamp\`
-    FROM (
-        SELECT
-            window_start,
-            window_end,
-            MAX(magnitude) AS max_mag,
-            MAX(pga_recorded) AS max_pga,
-            MAX(coseismic_slip) AS max_slip,
-            MAX(wave_height) AS max_wave,
-            (CASE WHEN MAX(magnitude) >= 7.0 THEN 1 ELSE 0 END) +
-            (CASE WHEN COALESCE(MAX(pga_recorded), 0.0) >= 0.15 THEN 1 ELSE 0 END) +
-            (CASE WHEN COALESCE(MAX(coseismic_slip), 0.0) >= 1.0 THEN 1 ELSE 0 END) +
-            (CASE WHEN COALESCE(MAX(wave_height), 0.0) >= 2.0 THEN 1 ELSE 0 END)
-            AS indicator_count
-        FROM TABLE(
-            TUMBLE(TABLE telemetry_events, DESCRIPTOR(\`timestamp\`), INTERVAL '2' MINUTE)
-        )
-        GROUP BY window_start, window_end
-    )
-    WHERE indicator_count >= 2
-);`,
-  },
-  {
-    id: 'tsunami_detection',
-    name: '04_tsunami_detection.sql (Wave Front Matcher)',
-    description: 'Pencocokan pola rambatan gelombang tsunami dari sensor InaTEWS DART Buoy & IOC tide gauge dengan ambang batas bahaya pesisir.',
-    sql: `-- Real-time tsunami wave height & anomaly pattern matching.
--- Sinks JSON alerts directly to Confluent Cloud topic gempa.tsunami_scenarios.
-
-INSERT INTO \`gempa.tsunami_scenarios\` (\`key\`, \`val\`)
-SELECT
-    CAST('tsunami' AS BYTES) AS \`key\`,
-    CAST(
-        JSON_OBJECT(
-            'active' VALUE TRUE,
-            'detection_time' VALUE DATE_FORMAT(window_start, 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z'''),
-            'sensor_id' VALUE sensor_id,
-            'wave_anomaly' VALUE max_wave_height,
-            'affected_zones' VALUE (
-                CASE 
-                    WHEN max_wave_height > 10.0 THEN JSON_ARRAY('Pesisir Mentawai', 'Padang', 'Cilacap', 'Anyer', 'Palu Bay')
-                    WHEN max_wave_height > 5.0 THEN JSON_ARRAY('Zona Pesisir Utama (0-10m ASL)', 'Pesisir Banten & Selat Sunda', 'Pesisir Barat Sumatera')
-                    ELSE JSON_ARRAY('Zona Waspada Pesisir', 'Pelabuhan Regional')
-                END
-            ),
-            'response_actions' VALUE (
-                CASE 
-                    WHEN max_wave_height > 5.0 THEN JSON_ARRAY('🚨 EVAKUASI SEGERA ke dataran tinggi (>20m)', 'Aktifkan sirene tsunami nasional', 'Hentikan seluruh navigasi laut & pelabuhan', 'Mobilisasi Tim SAR & BNPB')
-                    ELSE JSON_ARRAY('Waspada potensi gelombang tinggi', 'Jauhi pantai dan muara sungai')
-                END
-            ),
-            'severity' VALUE (
-                CASE 
-                    WHEN max_wave_height > 8.0 THEN 'CRITICAL'
-                    WHEN max_wave_height > 3.0 THEN 'HIGH'
-                    ELSE 'ELEVATED'
-                END
-            ),
-            'timestamp' VALUE DATE_FORMAT(window_end, 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''')
-        ) AS BYTES
-    ) AS \`val\`
-FROM (
-    SELECT
-        window_start,
-        window_end,
-        sensor_id,
-        MAX(wave_height) AS max_wave_height
-    FROM TABLE(
-        TUMBLE(TABLE ocean_events, DESCRIPTOR(\`timestamp\`), INTERVAL '1' MINUTE)
-    )
-    GROUP BY window_start, window_end, sensor_id
-)
-WHERE max_wave_height > 1.5;`,
-  },
-];
-
 export default function FlinkPanel({ activityIndex, status }: FlinkPanelProps) {
   const intensity = activityIndex?.overall_percentage ?? status?.seismic_intensity ?? 15.0;
 
   return (
-    <div className="flink-panel">
-      {/* Top Banner & Telemetry Header */}
-      <div className="card flink-header-card">
-        <div className="flink-header-card__left">
-          <div className="flink-header-card__icon-wrap">
-            <span className="flink-header-card__icon">⚡</span>
-          </div>
-          <div>
-            <div className="flink-header-card__title-row">
-              <h2 className="flink-header-card__title">Apache Flink Stream Processing Engine</h2>
-              <span className="card__badge card__badge--flink">CONFLUENT CLUSTER FLINK v1.20</span>
-              <span className="card__badge card__badge--live">LIVE PROCESSING</span>
+    <div className="flex flex-col gap-4">
+      {/* Header Banner */}
+      <div className="matte-card p-5">
+        <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[var(--accent-border)] bg-[var(--accent-muted)] text-[var(--accent)]">
+              <Workflow className="h-5 w-5" />
             </div>
-            <p className="flink-header-card__desc">
-              Stateful Stream Processing berkecepatan tinggi dengan distributed event-time tumbling windows,
-              multi-stream correlation, dan evaluasi kontinyu terhadap seluruh telemetri kegempaan Indonesia.
-            </p>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base font-bold text-[var(--text-primary)]">
+                  Mesin Pemrosesan Stream Apache Flink CEP
+                </h2>
+                <span className="rounded border border-[var(--accent-border)] bg-[var(--accent-muted)] px-2 py-0.5 font-mono text-[10px] font-semibold text-[var(--accent)]">
+                  CONFLUENT FLINK v1.20
+                </span>
+                <span className="rounded border border-[var(--sev-normal-border)] bg-[var(--sev-normal-bg)] px-2 py-0.5 font-mono text-[10px] font-semibold text-[var(--sev-normal)]">
+                  LIVE CEP
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                Stateful stream processing dengan tumbling event-time window, korelasi multi-sensor, dan evaluasi real-time seluruh telemetri kegempaan Indonesia.
+              </p>
+            </div>
           </div>
-        </div>
 
-        <div className="flink-header-card__stats">
-          <div className="flink-stat-box">
-            <span className="flink-stat-box__label">COMPUTE POOL</span>
-            <span className="flink-stat-box__val">cpool-gempa-prod</span>
-          </div>
-          <div className="flink-stat-box">
-            <span className="flink-stat-box__label">THROUGHPUT</span>
-            <span className="flink-stat-box__val">1,480 msgs/s</span>
-          </div>
-          <div className="flink-stat-box">
-            <span className="flink-stat-box__label">WATERMARK LAG</span>
-            <span className="flink-stat-box__val">&lt; 140 ms</span>
-          </div>
-          <div className="flink-stat-box">
-            <span className="flink-stat-box__label">CHECKPOINTS</span>
-            <span className="flink-stat-box__val" style={{ color: 'var(--status-normal)' }}>100% OK</span>
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+            <div className="rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-2)] px-3 py-2">
+              <div className="text-[10px] font-semibold text-[var(--text-muted)] uppercase">Compute Pool</div>
+              <div className="mt-0.5 font-mono text-xs font-bold text-[var(--text-primary)]">cpool-gempa-prod</div>
+            </div>
+            <div className="rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-2)] px-3 py-2">
+              <div className="text-[10px] font-semibold text-[var(--text-muted)] uppercase">Throughput</div>
+              <div className="mt-0.5 font-mono text-xs font-bold tabular-nums text-[var(--text-primary)]">1,480 msg/s</div>
+            </div>
+            <div className="rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-2)] px-3 py-2">
+              <div className="text-[10px] font-semibold text-[var(--text-muted)] uppercase">Watermark Lag</div>
+              <div className="mt-0.5 font-mono text-xs font-bold tabular-nums text-[var(--accent)]">&lt; 140 ms</div>
+            </div>
+            <div className="rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-2)] px-3 py-2">
+              <div className="text-[10px] font-semibold text-[var(--text-muted)] uppercase">Checkpoints</div>
+              <div className="mt-0.5 font-mono text-xs font-bold text-[var(--sev-normal)]">100% OK</div>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Visual Streaming Pipeline DAG Topology */}
-      <div className="card flink-dag-card">
-        <div className="card__header">
-          <span className="card__title">
-            <span className="card__title-icon">🔀</span>
-            Streaming DAG Topology (Confluent Cloud ➔ Flink Engine ➔ AI Hub)
+      {/* 4-Stage Pipeline DAG Topology */}
+      <div className="matte-card p-5">
+        <div className="mb-3 flex items-center justify-between border-b border-[var(--border-hairline)] pb-2.5">
+          <span className="inline-flex items-center gap-2 text-xs font-bold text-[var(--text-primary)]">
+            <GitBranch className="h-3.5 w-3.5 text-[var(--accent)]" />
+            <span>Topologi Pipeline DAG (Confluent Cloud → Apache Flink → AI Hub)</span>
           </span>
-          <span className="card__badge card__badge--live">ACTIVE EVENT FLOW</span>
+          <span className="rounded border border-[var(--sev-normal-border)] bg-[var(--sev-normal-bg)] px-2 py-0.5 font-mono text-[10px] font-semibold text-[var(--sev-normal)]">
+            ALIRAN AKTIF
+          </span>
         </div>
 
-        <div className="flink-dag">
-          {/* Step 1: Ingestion Topics */}
-          <div className="flink-dag__col">
-            <div className="flink-dag__col-title">1. KAFKA SOURCES</div>
-            <div className="flink-dag__node flink-dag__node--source">
-              <span className="flink-dag__node-tag">TOPIC</span>
-              <span className="flink-dag__node-name">gempa.seismic</span>
-              <span className="flink-dag__node-sub">BMKG & USGS Quakes</span>
+        <div className="grid grid-cols-1 items-stretch gap-3 lg:grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr]">
+          {/* Stage 1: Kafka Sources */}
+          <div className="flex flex-col gap-2 rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-2)] p-3">
+            <div className="inline-flex items-center gap-1.5 font-mono text-[10px] font-bold tracking-wider text-[var(--text-muted)] uppercase">
+              <Database className="h-3 w-3" /> 1. Topik Sumber Kafka
             </div>
-            <div className="flink-dag__node flink-dag__node--source">
-              <span className="flink-dag__node-tag">TOPIC</span>
-              <span className="flink-dag__node-name">gempa.stations</span>
-              <span className="flink-dag__node-sub">12 Broadband Seismometers</span>
-            </div>
-            <div className="flink-dag__node flink-dag__node--source">
-              <span className="flink-dag__node-tag">TOPIC</span>
-              <span className="flink-dag__node-name">gempa.tsunami</span>
-              <span className="flink-dag__node-sub">InaTEWS Buoys & IOC</span>
-            </div>
-            <div className="flink-dag__node flink-dag__node--source">
-              <span className="flink-dag__node-tag">TOPIC</span>
-              <span className="flink-dag__node-name">gempa.satellite</span>
-              <span className="flink-dag__node-sub">InSAR Fault Slip</span>
-            </div>
-            <div className="flink-dag__node flink-dag__node--source">
-              <span className="flink-dag__node-tag">TOPIC</span>
-              <span className="flink-dag__node-name">gempa.weather</span>
-              <span className="flink-dag__node-sub">Open-Meteo Maritime</span>
-            </div>
+            {[
+              { name: 'gempa.seismic', sub: 'BMKG & USGS Quakes' },
+              { name: 'gempa.stations', sub: '12 Seismometer Broadband' },
+              { name: 'gempa.tsunami', sub: 'InaTEWS Buoys & IOC' },
+              { name: 'gempa.satellite', sub: 'Deformasi InSAR' },
+              { name: 'gempa.weather', sub: 'Open-Meteo Maritim' },
+            ].map((topic) => (
+              <div
+                key={topic.name}
+                className="rounded border border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-1.5"
+              >
+                <div className="font-mono text-[11px] font-bold text-[var(--text-primary)]">
+                  {topic.name}
+                </div>
+                <div className="text-[10px] text-[var(--text-muted)]">{topic.sub}</div>
+              </div>
+            ))}
           </div>
 
-          <div className="flink-dag__arrow">➔</div>
-
-          {/* Step 2: Apache Flink Processing Jobs */}
-          <div className="flink-dag__col">
-            <div className="flink-dag__col-title">2. FLINK SQL PROCESSING</div>
-            <div className="flink-dag__node flink-dag__node--flink">
-              <span className="flink-dag__node-tag" style={{ color: '#00f2ff' }}>FLINK JOB #1</span>
-              <span className="flink-dag__node-name">TUMBLE Window (1 Min)</span>
-              <span className="flink-dag__node-sub">Seismic Intensity Index Aggregation (40% Mag + 35% PGA + 15% Slip + 10% Ocean)</span>
-            </div>
-            <div className="flink-dag__node flink-dag__node--flink">
-              <span className="flink-dag__node-tag" style={{ color: '#00f2ff' }}>FLINK JOB #2</span>
-              <span className="flink-dag__node-name">Multi-Indicator Join (2 Min)</span>
-              <span className="flink-dag__node-sub">Correlated Alert Engine (Threshold: ≥2 & ≥3 Sensors)</span>
-            </div>
-            <div className="flink-dag__node flink-dag__node--flink">
-              <span className="flink-dag__node-tag" style={{ color: '#00f2ff' }}>FLINK JOB #3</span>
-              <span className="flink-dag__node-name">Tsunami Anomaly Window (30s)</span>
-              <span className="flink-dag__node-sub">InaTEWS Wave Surge & Run-up Assessment</span>
-            </div>
+          <div className="hidden items-center justify-center text-[var(--text-muted)] lg:flex">
+            <ArrowRight className="h-4 w-4" />
           </div>
 
-          <div className="flink-dag__arrow">➔</div>
-
-          {/* Step 3: Sinks Topics */}
-          <div className="flink-dag__col">
-            <div className="flink-dag__col-title">3. KAFKA DERIVED SINKS</div>
-            <div className="flink-dag__node flink-dag__node--sink">
-              <span className="flink-dag__node-tag" style={{ color: '#10b981' }}>DERIVED TOPIC</span>
-              <span className="flink-dag__node-name">gempa.intensity_index</span>
-              <span className="flink-dag__node-sub">Current: {intensity.toFixed(1)}%</span>
+          {/* Stage 2: Flink SQL Processing */}
+          <div className="flex flex-col gap-2 rounded-lg border border-[var(--accent-border)] bg-[var(--accent-muted)] p-3">
+            <div className="inline-flex items-center gap-1.5 font-mono text-[10px] font-bold tracking-wider text-[var(--accent)] uppercase">
+              <Cpu className="h-3 w-3" /> 2. Pemrosesan Flink SQL
             </div>
-            <div className="flink-dag__node flink-dag__node--sink">
-              <span className="flink-dag__node-tag" style={{ color: '#10b981' }}>DERIVED TOPIC</span>
-              <span className="flink-dag__node-name">gempa.correlated_alerts</span>
-              <span className="flink-dag__node-sub">Multi-Agency Early Warning</span>
-            </div>
-            <div className="flink-dag__node flink-dag__node--sink">
-              <span className="flink-dag__node-tag" style={{ color: '#10b981' }}>DERIVED TOPIC</span>
-              <span className="flink-dag__node-name">gempa.tsunami_scenarios</span>
-              <span className="flink-dag__node-sub">Wave Height & Arrival Times</span>
-            </div>
+            {[
+              {
+                tag: 'JOB #1',
+                name: 'TUMBLE Window (1 Menit)',
+                sub: 'Agregasi Indeks Intensitas (Mag + PGA + Slip + Laut)',
+              },
+              {
+                tag: 'JOB #2',
+                name: 'Join Multi-Indikator (2 Menit)',
+                sub: 'Mesin Korelasi Peringatan (Ambang >= 2 & >= 3 Sensor)',
+              },
+              {
+                tag: 'JOB #3',
+                name: 'Anomali Tsunami (30 Detik)',
+                sub: 'Deteksi Lonjakan Gelombang InaTEWS & Proyeksi Run-up',
+              },
+            ].map((job) => (
+              <div
+                key={job.tag}
+                className="rounded border border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-2"
+              >
+                <div className="font-mono text-[9px] font-bold text-[var(--accent)]">{job.tag}</div>
+                <div className="text-xs font-bold text-[var(--text-primary)]">{job.name}</div>
+                <div className="mt-0.5 text-[10px] text-[var(--text-secondary)]">{job.sub}</div>
+              </div>
+            ))}
           </div>
 
-          <div className="flink-dag__arrow">➔</div>
+          <div className="hidden items-center justify-center text-[var(--text-muted)] lg:flex">
+            <ArrowRight className="h-4 w-4" />
+          </div>
 
-          {/* Step 4: AI & Decision Support Sinks */}
-          <div className="flink-dag__col">
-            <div className="flink-dag__col-title">4. INTELLIGENCE SINKS</div>
-            <div className="flink-dag__node flink-dag__node--ai">
-              <span className="flink-dag__node-tag" style={{ color: '#a855f7' }}>AI CONSUMER</span>
-              <span className="flink-dag__node-name">Google Gemini 2.5 Flash</span>
-              <span className="flink-dag__node-sub">Automated Tactical Assessment</span>
+          {/* Stage 3: Derived Sinks */}
+          <div className="flex flex-col gap-2 rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-2)] p-3">
+            <div className="inline-flex items-center gap-1.5 font-mono text-[10px] font-bold tracking-wider text-[var(--sev-normal)] uppercase">
+              <Database className="h-3 w-3" /> 3. Topik Output Flink
             </div>
-            <div className="flink-dag__node flink-dag__node--ai">
-              <span className="flink-dag__node-tag" style={{ color: '#a855f7' }}>STREAM HUB</span>
-              <span className="flink-dag__node-name">Go Backend SSE Hub</span>
-              <span className="flink-dag__node-sub">Real-Time WebSocket & Dashboard</span>
+            {[
+              { name: 'gempa.intensity_index', sub: `Indeks Aktif: ${intensity.toFixed(1)}%` },
+              { name: 'gempa.correlated_alerts', sub: 'Peringatan Dini Multi-Lembaga' },
+              { name: 'gempa.tsunami_scenarios', sub: 'Tinggi Gelombang & ETA Pantai' },
+            ].map((sink) => (
+              <div
+                key={sink.name}
+                className="rounded border border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-2"
+              >
+                <div className="font-mono text-[9px] font-bold text-[var(--sev-normal)]">
+                  DERIVED SINK
+                </div>
+                <div className="font-mono text-[11px] font-bold text-[var(--text-primary)]">
+                  {sink.name}
+                </div>
+                <div className="text-[10px] text-[var(--text-secondary)]">{sink.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="hidden items-center justify-center text-[var(--text-muted)] lg:flex">
+            <ArrowRight className="h-4 w-4" />
+          </div>
+
+          {/* Stage 4: Intelligence Consumers */}
+          <div className="flex flex-col gap-2 rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-2)] p-3">
+            <div className="inline-flex items-center gap-1.5 font-mono text-[10px] font-bold tracking-wider text-[var(--satellite-purple)] uppercase">
+              <Sparkles className="h-3 w-3" /> 4. Konsumer Intelijen
+            </div>
+            <div className="rounded border border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-2">
+              <div className="font-mono text-[9px] font-bold text-[var(--satellite-purple)]">
+                AI ENGINE
+              </div>
+              <div className="text-xs font-bold text-[var(--text-primary)]">
+                Gemini 2.5 &amp; AWS Bedrock
+              </div>
+              <div className="mt-0.5 text-[10px] text-[var(--text-secondary)]">
+                Evaluasi Risiko &amp; Agen OODA
+              </div>
+            </div>
+            <div className="rounded border border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-2">
+              <div className="font-mono text-[9px] font-bold text-[var(--accent)]">SSE HUB</div>
+              <div className="text-xs font-bold text-[var(--text-primary)]">
+                Go Backend &amp; Next.js API
+              </div>
+              <div className="mt-0.5 text-[10px] text-[var(--text-secondary)]">
+                Sinkronisasi Kokpit Real-Time
+              </div>
             </div>
           </div>
         </div>

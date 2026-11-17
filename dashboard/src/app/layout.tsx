@@ -1,9 +1,32 @@
 import type { Metadata } from "next";
+import { Space_Grotesk, Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+
+const spaceGrotesk = Space_Grotesk({
+  subsets: ["latin"],
+  variable: "--font-space-grotesk",
+  display: "swap",
+});
+
+const plusJakartaSans = Plus_Jakarta_Sans({
+  subsets: ["latin"],
+  variable: "--font-jakarta",
+  display: "swap",
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jetbrains-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "INATEWS SENTINEL — Sistem Peringatan Dini Gempa & Tsunami Indonesia",
-  description: "Real-Time AI for Disaster & Megathrust Intelligence with Early Warning. Streaming intelligence platform powered by BMKG TEWS, Confluent Cloud, Apache Flink, and Google Gemini AI.",
+  description:
+    "Pusat pemantauan atmosferik kegempaan, tsunami, dan gunung api Indonesia berbasis BMKG TEWS, IOC UNESCO, PVMBG MAGMA, dan AI.",
+  icons: {
+    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+  },
 };
 
 export default function RootLayout({
@@ -12,22 +35,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
-          rel="stylesheet"
-        />
-        <link
-          rel="stylesheet"
-          href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-          crossOrigin=""
-        />
-      </head>
-      <body>
+    <html
+      lang="id"
+      data-theme="dark"
+      className={`${spaceGrotesk.variable} ${plusJakartaSans.variable} ${jetbrainsMono.variable}`}
+      suppressHydrationWarning
+    >
+      <body className="antialiased selection:bg-cyan-400/25 selection:text-cyan-100">
         {children}
       </body>
     </html>
