@@ -6,8 +6,10 @@ import {
   ChevronDown,
   ChevronRight,
   Cpu,
+  Activity,
   Eye,
   EyeOff,
+  Radio,
 } from 'lucide-react';
 import type {
   SystemStatus,
@@ -553,6 +555,7 @@ export default function Home() {
   const [isDrillPlaying, setIsDrillPlaying] = useState<boolean>(false);
   const [alertDismissed, setAlertDismissed] = useState<boolean>(false);
   const [showHudInspector, setShowHudInspector] = useState<boolean>(true);
+  const [inspectorTab, setInspectorTab] = useState<'gempa' | 'telemetri'>('gempa');
   const [showInfraArchitecture, setShowInfraArchitecture] = useState<boolean>(false);
 
   const { playChime } = useAlertAudio(isAudioMuted);
@@ -1284,7 +1287,33 @@ export default function Home() {
             aria-label="Inspektor Gempa Terkini"
             className="no-scrollbar hidden lg:flex lg:flex-col lg:gap-2 lg:absolute lg:bottom-4 lg:right-4 lg:top-[84px] lg:z-[890] lg:w-[372px] lg:overflow-y-auto"
           >
-            <div className="flex justify-end">
+            <div className="flex items-center justify-between gap-2">
+              <div
+                role="tablist"
+                aria-label="Panel inspektor peta"
+                className="glass-hud inline-flex items-center gap-0.5 rounded-full p-0.5"
+              >
+                {([
+                  { id: 'gempa', label: 'Gempa', Icon: Radio },
+                  { id: 'telemetri', label: 'Telemetri', Icon: Activity },
+                ] as const).map(({ id, label, Icon }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="tab"
+                    aria-selected={inspectorTab === id}
+                    onClick={() => setInspectorTab(id)}
+                    className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold transition-colors ${
+                      inspectorTab === id
+                        ? 'bg-[var(--accent-strong)] text-white'
+                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                    }`}
+                  >
+                    <Icon className="h-3 w-3" />
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </div>
               <button
                 type="button"
                 onClick={() => setShowHudInspector(false)}
@@ -1294,13 +1323,60 @@ export default function Home() {
                 <span>Sembunyikan Panel</span>
               </button>
             </div>
-            <LatestQuakeCard
-              quake={effectiveLatestQuake}
-              realQuakes={realQuakes}
-              onFocusMap={handleFocusMap}
-              activityPercentage={effectiveActivityLevel}
-              deepDiveTargetId="deep-analytics-section"
-            />
+
+            {inspectorTab === 'gempa' ? (
+              <LatestQuakeCard
+                quake={effectiveLatestQuake}
+                realQuakes={realQuakes}
+                onFocusMap={handleFocusMap}
+                activityPercentage={effectiveActivityLevel}
+                deepDiveTargetId="deep-analytics-section"
+              />
+            ) : (
+              <div className="glass-hud flex min-h-0 flex-1 flex-col gap-4 rounded-2xl p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-[10px] font-bold tracking-[0.14em] text-[var(--text-muted)] uppercase">
+                    Telemetri Real-Time
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--accent-muted)] px-2 py-0.5 font-mono text-[10px] font-bold text-[var(--accent)]">
+                    <span className="live-dot-pulse" />
+                    FLINK CEP
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-3 border-b border-[var(--border-hairline)] pb-3">
+                  <ActivityGauge
+                    percentage={effectiveActivityLevel}
+                    trend={effectiveTrend}
+                    compact
+                  />
+                  <div className="min-w-0 flex-1 font-mono text-[10px] leading-relaxed text-[var(--text-muted)] uppercase">
+                    <div className="font-bold tracking-[0.14em]">Skala Intensitas</div>
+                    <div className="mt-1 text-[var(--text-secondary)] normal-case">
+                      Estimasi MMI dari agregasi stasiun broadband BMKG &amp; pasut IOC.
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-b border-[var(--border-hairline)] pb-1">
+                  <MetricCards
+                    bare
+                    oceanStatus={
+                      effectiveTsunami?.active
+                        ? 'TSUNAMI WAVE FRONT'
+                        : effectiveStatus?.ocean_status ?? 'IOC UNESCO LIVE'
+                    }
+                    weatherStatus={effectiveStatus?.weather_status ?? 'OPEN-METEO'}
+                    infraStatus={effectiveStatus?.infra_status ?? 'OPERASIONAL'}
+                    activityIndex={effectiveActivityIndex}
+                  />
+                </div>
+
+                <div className="min-h-[220px] flex-1">
+                  <EventStream bare events={events} maxHeightClass="max-h-[320px]" />
+                </div>
+              </div>
+            )}
           </aside>
         )}
 
@@ -1362,8 +1438,8 @@ export default function Home() {
           />
         </div>
 
-        {/* Summary & Telemetry Triad: MMI Gauge + Cross-Sensor + Live Event Stream */}
-        <section className="space-y-4">
+        {/* Summary & Telemetry Triad (mobile/tablet). Di desktop, panel ini menyatu dengan peta (tab "Telemetri" di inspektor kanan). */}
+        <section className="space-y-4 lg:hidden">
           <div className="flex items-baseline justify-between border-b border-[var(--border-hairline)] pb-2.5">
             <h2 className="font-display text-lg font-bold tracking-tight text-[var(--text-primary)] sm:text-xl">
               Telemetri Intensitas, Sensor &amp; Aliran Kejadian

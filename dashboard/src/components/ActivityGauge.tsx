@@ -6,9 +6,11 @@ import { ArrowDownRight, ArrowUpRight, Minus, Zap } from 'lucide-react';
 interface ActivityGaugeProps {
   percentage: number;
   trend: string;
+  /** Ukuran lebih kecil untuk panel HUD peta. */
+  compact?: boolean;
 }
 
-export default function ActivityGauge({ percentage, trend }: ActivityGaugeProps) {
+export default function ActivityGauge({ percentage, trend, compact = false }: ActivityGaugeProps) {
   const radius = 64;
   const circumference = 2 * Math.PI * radius;
   const clamped = Math.min(100, Math.max(0, percentage));
@@ -61,7 +63,7 @@ export default function ActivityGauge({ percentage, trend }: ActivityGaugeProps)
 
   return (
     <div className="flex flex-col items-center justify-center py-2">
-      <div className="relative h-40 w-40">
+      <div className={`relative ${compact ? 'h-32 w-32' : 'h-40 w-40'}`}>
         <svg className="h-full w-full -rotate-90" viewBox="0 0 160 160">
           <circle
             cx="80"
@@ -88,7 +90,7 @@ export default function ActivityGauge({ percentage, trend }: ActivityGaugeProps)
 
         <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
           <span
-            className="font-mono text-2xl font-extrabold tracking-tight"
+            className={`font-mono ${compact ? 'text-lg' : 'text-2xl'} font-extrabold tracking-tight`}
             style={{ color: mmiInfo.color }}
           >
             {mmiInfo.roman}

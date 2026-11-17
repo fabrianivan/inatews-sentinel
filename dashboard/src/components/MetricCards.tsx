@@ -7,6 +7,8 @@ interface MetricCardsProps {
   weatherStatus: string;
   infraStatus?: string;
   activityIndex: ActivityIndex | null;
+  /** Render tanpa pembungkus kartu (untuk disematkan di panel HUD peta). */
+  bare?: boolean;
 }
 
 function statusTone(status: string): string {
@@ -25,6 +27,7 @@ export default function MetricCards({
   weatherStatus,
   infraStatus = 'OPERASIONAL',
   activityIndex,
+  bare = false,
 }: MetricCardsProps) {
   const deformation = activityIndex?.deformation_trend || 'TERPANTAU';
   const deformAlert =
@@ -45,7 +48,7 @@ export default function MetricCards({
   ];
 
   return (
-    <div className="matte-card p-5">
+    <div className={bare ? '' : 'matte-card p-5'}>
       <div className="mb-3 font-mono text-[10px] font-bold tracking-[0.14em] text-[var(--text-muted)] uppercase">
         Parameter Lintas Sensor
       </div>

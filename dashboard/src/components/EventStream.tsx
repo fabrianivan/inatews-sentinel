@@ -7,6 +7,8 @@ import type { LiveEvent } from '@/lib/types';
 interface EventStreamProps {
   events: LiveEvent[];
   maxHeightClass?: string;
+  /** Render tanpa pembungkus kartu (untuk disematkan di panel HUD peta). */
+  bare?: boolean;
 }
 
 type StreamCategory = 'ALL' | 'SEISMIC' | 'OCEAN' | 'STATION' | 'VOLCANO' | 'INFRA';
@@ -70,6 +72,7 @@ function severityDotColor(severity: string): string {
 export default function EventStream({
   events,
   maxHeightClass = 'max-h-[420px]',
+  bare = false,
 }: EventStreamProps) {
   const [isMounted, setIsMounted] = useState(false);
   const [activeCategory, setActiveCategory] = useState<StreamCategory>('ALL');
@@ -100,7 +103,7 @@ export default function EventStream({
   );
 
   return (
-    <div className="matte-card flex h-full flex-col overflow-hidden p-5">
+    <div className={`flex h-full flex-col overflow-hidden ${bare ? '' : 'matte-card p-5'}`}>
       {/* Header */}
       <div className="mb-3 flex items-center justify-between gap-2">
         <div>
