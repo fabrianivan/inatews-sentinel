@@ -1,3 +1,4 @@
+import { formatWibDate } from './time';
 import type { VolcanoEruption } from './types';
 
 export interface VolcanoLocation {
@@ -200,11 +201,15 @@ export function getVolcanoReports(
   });
 }
 
+const ROUTINE_RECORD_PREFIX = 'routine-';
+
 /**
  * The record handed to the PVMBG analysis modal for a volcano: its newest MAGMA
- * report when the feed has one, otherwise a routine-monitoring record built from
- * the observation-post catalogue — so every volcano can be analysed, not only the
- * ones that erupted recently.
+ * report when the feed has one, otherwise a placeholder built from the
+ * observation-post catalogue — so every volcano can be opened, not only the
+ * ones that erupted recently. The placeholder carries example amplitude and
+ * duration values; `isRoutineRecord` tells the two apart so the UI never shows
+ * them as a recording.
  */
 export function buildVolcanoInspectionReport(
   volcano: VolcanoLocation,
@@ -213,20 +218,50 @@ export function buildVolcanoInspectionReport(
   const latest = getVolcanoReports(volcano, reports)[0];
   if (latest) return latest;
 
+  const now = new Date();
   return {
-    id: `routine-${volcano.name.toLowerCase().replace(/\s+/g, '-')}`,
+    id: `${ROUTINE_RECORD_PREFIX}${volcano.name.toLowerCase().replace(/\s+/g, '-')}`,
     volcano_name: volcano.name,
-    time: 'Pemantauan Rutin',
-    date: new Date().toLocaleDateString('id-ID'),
-    description: `${volcano.pgaStation} merekam tremor vulkanik latar belakang. Belum ada laporan erupsi baru dari MAGMA PVMBG untuk G. ${volcano.name}.`,
+    time: 'Pemantauan rutin',
+    date: formatWibDate(now),
+    description: `Belum ada laporan erupsi baru dari MAGMA untuk G. ${volcano.name}. Catatan ini adalah contoh, bukan rekaman ${volcano.pgaStation}.`,
     amplitude: '15 mm',
     duration: '45 detik',
-    visual_ash: 'Asap kawah putih intensitas tipis hingga sedang',
-    author: 'Petugas Pos Pengamatan PVMBG',
+    visual_ash: 'Tidak tersedia — belum ada laporan visual dari MAGMA',
+    author: 'Tidak ada (catatan contoh)',
     alert_level: volcano.defaultLevel,
-    recommendation: 'Masyarakat dilarang mendekati kawah aktif sesuai radius rekomendasi PVMBG.',
-    timestamp: new Date().toISOString(),
+    recommendation: 'Ikuti rekomendasi resmi PVMBG di MAGMA Indonesia (magma.esdm.go.id).',
+    timestamp: now.toISOString(),
   };
+}
+
+/** True for the placeholder record `buildVolcanoInspectionReport` makes when MAGMA has no report. */
+export function isRoutineRecord(report: Pick<VolcanoEruption, 'id'>): boolean {
+  return report.id.startsWith(ROUTINE_RECORD_PREFIX);
+}
+
+/**
+ * Where a volcano record comes from, so only a report scraped from MAGMA is
+ * presented as one:
+ *
+ *  live      scraped from MAGMA Indonesia by the standalone poller
+ *  backend   delivered by the Go backend, which does not state its origin
+ *  seeded    built-in placeholder list used while MAGMA is unreachable
+ *  routine   placeholder record for a volcano with no report at all
+ */
+export type VolcanoRecordOrigin = 'live' | 'backend' | 'seeded' | 'routine';
+
+export function volcanoRecordOrigin(report: Pick<VolcanoEruption, 'id' | 'source'>): VolcanoRecordOrigin {
+  if (isRoutineRecord(report)) return 'routine';
+  if (report.source === 'PVMBG_LIVE') return 'live';
+  if (report.source === 'SEEDED') return 'seeded';
+  return 'backend';
+}
+
+/** True when the record's amplitude, duration and text are examples rather than a MAGMA report. */
+export function isPlaceholderRecord(report: Pick<VolcanoEruption, 'id' | 'source'>): boolean {
+  const origin = volcanoRecordOrigin(report);
+  return origin === 'routine' || origin === 'seeded';
 }
 
 export function findVolcanoLocation(name: string): VolcanoLocation | null {
@@ -243,6 +278,11 @@ export function findVolcanoLocation(name: string): VolcanoLocation | null {
   return null;
 }
 
+/**
+ * Static illustration of an ash plume per volcano: wind, plume height and
+ * colour code are fixed example values, not a VONA and not a forecast. Every
+ * surface that renders one labels it with `ASH_TRAJECTORY_DISCLAIMER`.
+ */
 export interface VolcanicAshTrajectory {
   volcanoName: string;
   windDirectionDeg: number; // Wind blowing towards this azimuth (0° North, 90° East, 180° South, 270° West)
@@ -259,6 +299,16 @@ export interface VolcanicAshTrajectory {
   ashDispersionDurationEst: string; // Estimasi durasi partikel abu melayang di troposfer
   totalHazardWindow: string; // Waktu jendela mitigasi siaga
 }
+
+export const ASH_TRAJECTORY_DISCLAIMER = 'ilustrasi — bukan VONA resmi';
+
+/** Indonesian names for the aviation colour codes, so no raw English level reaches the UI. */
+export const VONA_COLOR_LABEL: Record<VolcanicAshTrajectory['vonaColorCode'], string> = {
+  RED: 'Merah',
+  ORANGE: 'Oranye',
+  YELLOW: 'Kuning',
+  GREEN: 'Hijau',
+};
 
 export const VOLCANIC_ASH_TRAJECTORIES: Record<string, VolcanicAshTrajectory> = {
   'Anak Krakatau': {
@@ -367,7 +417,7 @@ export function getVolcanicAshTrajectory(volcanoName: string): VolcanicAshTrajec
       return VOLCANIC_ASH_TRAJECTORIES[key];
     }
   }
-  // Default dynamic estimate
+  // No entry for this volcano: a generic example plume
   return {
     volcanoName,
     windDirectionDeg: 240,
@@ -385,4 +435,3 @@ export function getVolcanicAshTrajectory(volcanoName: string): VolcanicAshTrajec
     totalHazardWindow: 'Hingga 6 - 8 jam pasca-erupsi',
   };
 }
-

@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "rm -rf .next/test-dist && ./node_modules/.bin/tsc --rootDir src --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --outDir .next/test-dist src/lib/__tests__/telemetry.test.ts src/lib/__tests__/aiContext.test.ts && node --test .next/test-dist/lib/__tests__/*.test.js && rm -rf .next/test-dist"
+    "test": "rm -rf .next/test-dist && ./node_modules/.bin/tsc --rootDir src --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --outDir .next/test-dist src/lib/__tests__/*.test.ts && node --test .next/test-dist/lib/__tests__/*.test.js && rm -rf .next/test-dist"
   },
   "dependencies": {
     "@types/leaflet": "^1.9.22",

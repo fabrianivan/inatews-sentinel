@@ -7,20 +7,39 @@
   --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, monospace;
 }
 
+/* ==========================================================================
+   Design tokens
+
+   Colour has five jobs, each with its own family. They never borrow from one
+   another:
+     · tone (--tone-*)   this product's own priority scale: rutin / meningkat /
+                         tinggi / kritis, plus "unknown". The only colours that
+                         may mean severity. Official agency levels quoted in the
+                         UI are coloured through the same scale.
+     · ok (--ok*)        system and feed health only — never "no hazard".
+     · accent            brand and interactive / selected state.
+     · drill (--drill*)  simulation chrome — violet, never a severity colour.
+     · info (--info*)    neutral informational highlights.
+
+   Tints are opaque so status text keeps its contrast over any basemap.
+   ========================================================================== */
+
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
 
-  /* Apple Weather / Windy Atmospheric Obsidian Glass */
+  /* Surfaces */
   --surface-canvas: #04070f;
   --surface-1: #0b1220;
   --surface-2: rgba(18, 28, 48, 0.72);
   --surface-3: rgba(30, 44, 72, 0.78);
-  --surface-elevated: rgba(9, 15, 28, 0.76);
+  --surface-elevated: rgba(9, 15, 28, 0.94);
   --surface-subtle: rgba(255, 255, 255, 0.04);
 
-  /* Translucent Glass HUD Tokens */
-  --glass-surface: rgba(9, 15, 28, 0.74);
+  /* Blurred glass: masthead and inspector only */
+  --glass-surface: rgba(10, 16, 30, 0.86);
+  /* Solid HUD surface: pills, strips and cards that carry status text */
+  --hud-solid: rgba(10, 16, 30, 0.94);
   --glass-border: rgba(148, 163, 184, 0.18);
   --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.09);
 
@@ -34,34 +53,83 @@
   --text-secondary: #cbd5e1;
   --text-muted: #94a3b8;
 
-  /* Luminous Cyan & Coral Crimson Accents */
+  /* Accent — brand, links, selected and focused controls */
   --accent: #22d3ee;
   --accent-strong: #0369a1;
   --accent-muted: rgba(34, 211, 238, 0.13);
   --accent-border: rgba(34, 211, 238, 0.34);
+  --accent-ink: #04121a;
+  --focus-ring: #22d3ee;
 
-  /* Semantic Hazard Severity */
-  --sev-normal: #34d399;
-  --sev-normal-bg: rgba(52, 211, 153, 0.13);
-  --sev-normal-border: rgba(52, 211, 153, 0.34);
+  /* Health */
+  --ok: #4ade80;
+  --ok-bg: #0c2a1f;
+  --ok-border: #22c55e;
 
-  --sev-advisory: #38bdf8;
-  --sev-advisory-bg: rgba(56, 189, 248, 0.13);
-  --sev-advisory-border: rgba(56, 189, 248, 0.34);
+  /* Tone scale: text / opaque tint / border / solid fill + ink */
+  --tone-unknown: #94a3b8;
+  --tone-unknown-bg: rgba(148, 163, 184, 0.08);
+  --tone-unknown-border: rgba(148, 163, 184, 0.5);
+  --tone-unknown-solid: #475569;
+  --tone-unknown-ink: #f8fafc;
 
-  --sev-elevated: #fbbf24;
-  --sev-elevated-bg: rgba(251, 191, 36, 0.13);
-  --sev-elevated-border: rgba(251, 191, 36, 0.36);
+  --tone-rutin: #cbd5e1;
+  --tone-rutin-bg: rgba(148, 163, 184, 0.1);
+  --tone-rutin-border: rgba(148, 163, 184, 0.3);
+  --tone-rutin-solid: #334155;
+  --tone-rutin-ink: #f8fafc;
 
-  --sev-high: #fb923c;
-  --sev-high-bg: rgba(251, 146, 60, 0.15);
-  --sev-high-border: rgba(251, 146, 60, 0.38);
+  --tone-meningkat: #fde047;
+  --tone-meningkat-bg: #2e2706;
+  --tone-meningkat-border: #eab308;
+  --tone-meningkat-solid: #eab308;
+  --tone-meningkat-ink: #1c1400;
 
-  --sev-critical: #fb7185;
-  --sev-critical-bg: rgba(244, 63, 94, 0.16);
-  --sev-critical-border: rgba(251, 113, 133, 0.44);
+  --tone-tinggi: #fdba74;
+  --tone-tinggi-bg: #371d08;
+  --tone-tinggi-border: #f97316;
+  --tone-tinggi-solid: #f97316;
+  --tone-tinggi-ink: #1f0d00;
 
-  /* Legacy compatibility tokens */
+  --tone-kritis: #fca5a5;
+  --tone-kritis-bg: #3f1216;
+  --tone-kritis-border: #ef4444;
+  --tone-kritis-solid: #dc2626;
+  --tone-kritis-ink: #ffffff;
+
+  /* Simulation chrome */
+  --drill: #c4b5fd;
+  --drill-bg: #221a44;
+  --drill-border: #8b5cf6;
+  --drill-stripe: rgba(139, 92, 246, 0.45);
+  --drill-ink: #12082b;
+
+  /* Informational (never severity) */
+  --info: #38bdf8;
+  --info-bg: rgba(56, 189, 248, 0.13);
+  --info-border: rgba(56, 189, 248, 0.34);
+
+  /* Layout: everything floating over the map starts below the masthead */
+  --masthead-height: 56px;
+  --hud-top: 84px;
+
+  /* Legacy aliases: components written before the tone scale read --sev-* */
+  --sev-normal: var(--ok);
+  --sev-normal-bg: var(--ok-bg);
+  --sev-normal-border: var(--ok-border);
+  --sev-advisory: var(--info);
+  --sev-advisory-bg: var(--info-bg);
+  --sev-advisory-border: var(--info-border);
+  --sev-elevated: var(--tone-meningkat);
+  --sev-elevated-bg: var(--tone-meningkat-bg);
+  --sev-elevated-border: var(--tone-meningkat-border);
+  --sev-high: var(--tone-tinggi);
+  --sev-high-bg: var(--tone-tinggi-bg);
+  --sev-high-border: var(--tone-tinggi-border);
+  --sev-critical: var(--tone-kritis);
+  --sev-critical-bg: var(--tone-kritis-bg);
+  --sev-critical-border: var(--tone-kritis-border);
+
   --bg-base: var(--surface-canvas);
   --bg-primary: var(--surface-1);
   --bg-secondary: var(--surface-2);
@@ -69,30 +137,31 @@
   --bg-panel: var(--surface-elevated);
   --border-subtle: var(--border-hairline);
   --border-medium: var(--border-strong);
-  --status-normal: var(--sev-normal);
-  --status-advisory: var(--sev-advisory);
-  --status-elevated: var(--sev-elevated);
-  --status-high: var(--sev-high);
-  --status-critical: var(--sev-critical);
-  --volcanic-orange: #fb923c;
-  --volcanic-amber: #fbbf24;
-  --volcanic-red: #fb7185;
+  --status-normal: var(--ok);
+  --status-advisory: var(--info);
+  --status-elevated: var(--tone-meningkat);
+  --status-high: var(--tone-tinggi);
+  --status-critical: var(--tone-kritis);
+  --volcanic-orange: var(--tone-tinggi);
+  --volcanic-amber: var(--tone-meningkat);
+  --volcanic-red: var(--tone-kritis);
   --ocean-cyan: #22d3ee;
-  --satellite-purple: #c084fc;
+  /* Was purple; violet now belongs to drills, so analysis tools use the info blue. */
+  --satellite-purple: var(--info);
 }
 
 [data-theme="light"] {
   color-scheme: light;
 
-  /* Crisp Frosted Cartography Daylight Toggle */
   --surface-canvas: #eef3f8;
   --surface-1: #ffffff;
   --surface-2: rgba(241, 245, 249, 0.85);
   --surface-3: rgba(226, 232, 240, 0.9);
-  --surface-elevated: rgba(255, 255, 255, 0.82);
+  --surface-elevated: rgba(255, 255, 255, 0.96);
   --surface-subtle: rgba(15, 23, 42, 0.04);
 
-  --glass-surface: rgba(255, 255, 255, 0.8);
+  --glass-surface: rgba(255, 255, 255, 0.88);
+  --hud-solid: rgba(255, 255, 255, 0.96);
   --glass-border: rgba(15, 23, 42, 0.11);
   --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.9);
 
@@ -103,50 +172,60 @@
 
   --text-primary: #0f172a;
   --text-secondary: #334155;
-  --text-muted: #64748b;
+  --text-muted: #475569;
 
-  --accent: #0284c7;
-  --accent-strong: #0369a1;
-  --accent-muted: rgba(2, 132, 199, 0.1);
-  --accent-border: rgba(2, 132, 199, 0.3);
+  --accent: #0369a1;
+  --accent-strong: #075985;
+  --accent-muted: rgba(3, 105, 161, 0.1);
+  --accent-border: rgba(3, 105, 161, 0.32);
+  --accent-ink: #ffffff;
+  --focus-ring: #0369a1;
 
-  --sev-normal: #059669;
-  --sev-normal-bg: rgba(5, 150, 105, 0.1);
-  --sev-normal-border: rgba(5, 150, 105, 0.3);
+  --ok: #166534;
+  --ok-bg: #dcfce7;
+  --ok-border: #16a34a;
 
-  --sev-advisory: #0284c7;
-  --sev-advisory-bg: rgba(2, 132, 199, 0.1);
-  --sev-advisory-border: rgba(2, 132, 199, 0.3);
+  --tone-unknown: #475569;
+  --tone-unknown-bg: rgba(15, 23, 42, 0.04);
+  --tone-unknown-border: rgba(15, 23, 42, 0.4);
+  --tone-unknown-solid: #64748b;
+  --tone-unknown-ink: #ffffff;
 
-  --sev-elevated: #d97706;
-  --sev-elevated-bg: rgba(217, 119, 6, 0.11);
-  --sev-elevated-border: rgba(217, 119, 6, 0.32);
+  --tone-rutin: #334155;
+  --tone-rutin-bg: rgba(15, 23, 42, 0.05);
+  --tone-rutin-border: rgba(15, 23, 42, 0.2);
+  --tone-rutin-solid: #475569;
+  --tone-rutin-ink: #ffffff;
 
-  --sev-high: #ea580c;
-  --sev-high-bg: rgba(234, 88, 12, 0.11);
-  --sev-high-border: rgba(234, 88, 12, 0.32);
+  --tone-meningkat: #713f12;
+  --tone-meningkat-bg: #fef08a;
+  --tone-meningkat-border: #a16207;
+  --tone-meningkat-solid: #eab308;
+  --tone-meningkat-ink: #1c1400;
 
-  --sev-critical: #e11d48;
-  --sev-critical-bg: rgba(225, 29, 72, 0.11);
-  --sev-critical-border: rgba(225, 29, 72, 0.34);
+  --tone-tinggi: #9a3412;
+  --tone-tinggi-bg: #ffedd5;
+  --tone-tinggi-border: #ea580c;
+  --tone-tinggi-solid: #c2410c;
+  --tone-tinggi-ink: #ffffff;
 
-  --bg-base: var(--surface-canvas);
-  --bg-primary: var(--surface-1);
-  --bg-secondary: var(--surface-2);
-  --bg-card: var(--surface-1);
-  --bg-panel: var(--surface-elevated);
-  --border-subtle: var(--border-hairline);
-  --border-medium: var(--border-strong);
-  --status-normal: var(--sev-normal);
-  --status-advisory: var(--sev-advisory);
-  --status-elevated: var(--sev-elevated);
-  --status-high: var(--sev-high);
-  --status-critical: var(--sev-critical);
-  --volcanic-orange: #ea580c;
-  --volcanic-amber: #d97706;
-  --volcanic-red: #e11d48;
-  --ocean-cyan: #0891b2;
-  --satellite-purple: #7c3aed;
+  --tone-kritis: #991b1b;
+  --tone-kritis-bg: #fee2e2;
+  --tone-kritis-border: #dc2626;
+  --tone-kritis-solid: #b91c1c;
+  --tone-kritis-ink: #ffffff;
+
+  --drill: #5b21b6;
+  --drill-bg: #ede9fe;
+  --drill-border: #7c3aed;
+  --drill-stripe: rgba(124, 58, 237, 0.4);
+  --drill-ink: #ffffff;
+
+  --info: #0369a1;
+  --info-bg: rgba(3, 105, 161, 0.1);
+  --info-border: rgba(3, 105, 161, 0.3);
+
+  --ocean-cyan: #0e7490;
 }
 
 html,
@@ -159,70 +238,428 @@ body {
   scroll-behavior: smooth;
 }
 
+/* The masthead is fixed: keep scrolled-to and focused content clear of it */
+html {
+  scroll-padding-top: calc(var(--hud-top) + 8px);
+}
+
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
 
-/* Atmospheric Frosted Glass HUD & Below-Fold Cards */
-.glass-hud {
-  background: var(--glass-surface);
-  border: 1px solid var(--glass-border);
-  backdrop-filter: blur(20px) saturate(165%);
-  -webkit-backdrop-filter: blur(20px) saturate(165%);
-  box-shadow: var(--shadow-card);
+/* Keyboard focus is always visible, on glass and on the map alike */
+:where(a, button, input, select, textarea, summary, [tabindex], [role="tab"]):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
-.matte-card,
-.card {
-  background: var(--glass-surface);
-  border: 1px solid var(--glass-border);
-  border-radius: 18px;
-  backdrop-filter: blur(18px) saturate(150%);
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
-  box-shadow: var(--shadow-card);
+/* A tone is set once on an element; it and everything inside read --tone* */
+[data-tone="unknown"] {
+  --tone: var(--tone-unknown);
+  --tone-bg: var(--tone-unknown-bg);
+  --tone-border: var(--tone-unknown-border);
+  --tone-solid: var(--tone-unknown-solid);
+  --tone-ink: var(--tone-unknown-ink);
 }
 
-.card__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--border-hairline);
+[data-tone="rutin"] {
+  --tone: var(--tone-rutin);
+  --tone-bg: var(--tone-rutin-bg);
+  --tone-border: var(--tone-rutin-border);
+  --tone-solid: var(--tone-rutin-solid);
+  --tone-ink: var(--tone-rutin-ink);
 }
 
-.card__title {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-primary);
-  letter-spacing: -0.01em;
+[data-tone="meningkat"] {
+  --tone: var(--tone-meningkat);
+  --tone-bg: var(--tone-meningkat-bg);
+  --tone-border: var(--tone-meningkat-border);
+  --tone-solid: var(--tone-meningkat-solid);
+  --tone-ink: var(--tone-meningkat-ink);
 }
 
-.card__body {
-  padding: 18px 20px;
+[data-tone="tinggi"] {
+  --tone: var(--tone-tinggi);
+  --tone-bg: var(--tone-tinggi-bg);
+  --tone-border: var(--tone-tinggi-border);
+  --tone-solid: var(--tone-tinggi-solid);
+  --tone-ink: var(--tone-tinggi-ink);
 }
 
-/* Lightbox backdrop */
-.volcano-lightbox {
-  position: fixed;
-  inset: 0;
-  background: rgba(2, 6, 23, 0.82);
-  backdrop-filter: blur(10px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-  z-index: 3000;
+[data-tone="kritis"] {
+  --tone: var(--tone-kritis);
+  --tone-bg: var(--tone-kritis-bg);
+  --tone-border: var(--tone-kritis-border);
+  --tone-solid: var(--tone-kritis-solid);
+  --tone-ink: var(--tone-kritis-ink);
 }
 
-/* Bioluminescent live pulse dot & Map Ping Keyframes */
+/* A drill adds its control strip under the masthead, so the HUD starts lower */
+[data-mode="simulasi"] {
+  --hud-top: 132px;
+}
+
+/* ==========================================================================
+   Component classes — in the components layer so Tailwind utilities on the
+   same element (bg-*, border-*, rounded-*) win, as authors expect.
+   ========================================================================== */
+
+@layer components {
+  /* Blurred glass: reserved for the masthead and the inspector */
+  .glass-hud {
+    background: var(--glass-surface);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(14px) saturate(120%);
+    box-shadow: var(--shadow-card);
+  }
+
+  /* Solid HUD surface: pills, strips and cards over the map. No blur — status
+     text must not sit on smeared map colour, and many blurred layers are costly. */
+  .hud-solid {
+    background: var(--hud-solid);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--shadow-card);
+  }
+
+  /* Solid card for content below the map */
+  .matte-card,
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--glass-border);
+    border-radius: 18px;
+    box-shadow: var(--shadow-card);
+  }
+
+  .card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border-hairline);
+  }
+
+  .card__title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+  }
+
+  .card__body {
+    padding: 18px 20px;
+  }
+
+  /* Tone-tinted panel: the tint sits on an opaque base, never on raw map tiles */
+  .alert-surface {
+    background:
+      linear-gradient(var(--tone-bg, transparent), var(--tone-bg, transparent)),
+      var(--surface-1);
+    border: 1px solid var(--tone-border, var(--glass-border));
+    box-shadow: var(--shadow-elevated);
+  }
+
+  /* ---- Type scale (sized for the 372px inspector) ---- */
+
+  .t-micro {
+    font-size: 0.6875rem;
+    line-height: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .t-meta {
+    font-size: 0.75rem;
+    line-height: 1rem;
+    color: var(--text-secondary);
+  }
+
+  .t-body {
+    font-size: 0.8125rem;
+    line-height: 1.25rem;
+    color: var(--text-primary);
+  }
+
+  .t-data {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.8125rem;
+    line-height: 1.25rem;
+    font-weight: 600;
+  }
+
+  .t-data-lg {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 1rem;
+    line-height: 1.25rem;
+    font-weight: 600;
+  }
+
+  .t-hero {
+    font-family: var(--font-display);
+    font-variant-numeric: tabular-nums;
+    font-size: 2.75rem;
+    line-height: 1;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .t-heading {
+    font-family: var(--font-display);
+    font-size: 0.9375rem;
+    line-height: 1.25rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+  }
+
+  .t-heading-lg {
+    font-family: var(--font-display);
+    font-size: 1.25rem;
+    line-height: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+  }
+
+  .t-status {
+    font-size: 0.8125rem;
+    line-height: 1rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  /* ---- Tone chips: fill weight escalates with the tone ---- */
+
+  .tone-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    min-height: 1.5rem;
+    padding: 0.125rem 0.625rem;
+    border-radius: 9999px;
+    border: 1px solid var(--tone-border, var(--border-hairline));
+    background: var(--tone-bg, var(--surface-subtle));
+    color: var(--tone, var(--text-secondary));
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    line-height: 1;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  /* Solid: the one object on a surface that must be read first */
+  .tone-chip--solid {
+    border-color: transparent;
+    background: var(--tone-solid, var(--text-secondary));
+    color: var(--tone-ink, #ffffff);
+  }
+
+  /* Outline: an agency's own level, quoted — never louder than our own status */
+  .tone-chip--outline {
+    background: transparent;
+    text-transform: none;
+    letter-spacing: 0.01em;
+  }
+
+  .tone-chip[data-tone="unknown"],
+  [data-tone="unknown"] > .tone-chip {
+    border-style: dashed;
+  }
+
+  .tone-text {
+    color: var(--tone, var(--text-primary));
+  }
+
+  /* ---- Simulation chrome ---- */
+
+  .drill-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    min-height: 1.5rem;
+    padding: 0.125rem 0.625rem;
+    border-radius: 9999px;
+    border: 1px solid var(--drill-border);
+    background: var(--drill-bg);
+    color: var(--drill);
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    line-height: 1;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  /* Hatched edge band. The hatch never runs under text. */
+  .drill-band {
+    flex-shrink: 0;
+    align-self: stretch;
+    width: 6px;
+    background-image: repeating-linear-gradient(
+      135deg,
+      var(--drill-border) 0 4px,
+      transparent 4px 8px
+    );
+  }
+
+  /* Frame for any object shown inside a drill, including severity-coloured ones */
+  .drill-frame {
+    outline: 2px dashed var(--drill-border);
+    outline-offset: 2px;
+  }
+
+  /* Tiled "SIMULASI" watermark over the map so a cropped screenshot stays identifiable */
+  .drill-watermark {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-color: var(--drill);
+    opacity: 0.16;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='340' height='200'%3E%3Ctext x='170' y='108' text-anchor='middle' font-family='system-ui,sans-serif' font-size='24' font-weight='800' letter-spacing='6' transform='rotate(-22 170 100)'%3ESIMULASI %C2%B7 LATIHAN%3C/text%3E%3C/svg%3E") repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='340' height='200'%3E%3Ctext x='170' y='108' text-anchor='middle' font-family='system-ui,sans-serif' font-size='24' font-weight='800' letter-spacing='6' transform='rotate(-22 170 100)'%3ESIMULASI %C2%B7 LATIHAN%3C/text%3E%3C/svg%3E") repeat;
+  }
+
+  /* ---- Small shared controls ---- */
+
+  /* Feed state dot: only a live feed pulses */
+  .status-dot {
+    --dot: var(--text-muted);
+    display: inline-block;
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    border-radius: 9999px;
+    background: var(--dot);
+  }
+
+  .status-dot[data-state="live"] {
+    --dot: var(--ok);
+    animation: status-dot-pulse 2s infinite;
+  }
+
+  .status-dot[data-state="stale"],
+  .status-dot[data-state="seed"] {
+    --dot: var(--tone-meningkat);
+  }
+
+  .status-dot[data-state="failed"] {
+    --dot: var(--tone-kritis);
+  }
+
+  .status-dot[data-state="drill"] {
+    --dot: var(--drill);
+  }
+
+  /* Round icon button used across the HUD */
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    flex-shrink: 0;
+    border-radius: 9999px;
+    border: 1px solid var(--border-hairline);
+    background: var(--surface-subtle);
+    color: var(--text-secondary);
+    transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease;
+  }
+
+  .icon-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--border-strong);
+  }
+
+  .icon-btn[aria-pressed="true"] {
+    border-color: var(--accent-border);
+    background: var(--accent-muted);
+    color: var(--accent);
+  }
+
+  /* Lightbox backdrop */
+  .volcano-lightbox {
+    position: fixed;
+    inset: 0;
+    background: rgba(2, 6, 23, 0.82);
+    backdrop-filter: blur(10px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    z-index: 3000;
+  }
+
+  /* Modal & seismogram inspection helpers */
+  .volcano-card__level-badge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    border: 1px solid var(--border-hairline);
+  }
+
+  .volcano-card__level-badge--awas {
+    background: var(--tone-kritis-bg);
+    color: var(--tone-kritis);
+    border-color: var(--tone-kritis-border);
+  }
+
+  .volcano-card__level-badge--siaga {
+    background: var(--tone-tinggi-bg);
+    color: var(--tone-tinggi);
+    border-color: var(--tone-tinggi-border);
+  }
+
+  .volcano-card__level-badge--waspada {
+    background: var(--tone-meningkat-bg);
+    color: var(--tone-meningkat);
+    border-color: var(--tone-meningkat-border);
+  }
+
+  .volcano-lightbox__close-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 8px;
+    border: 1px solid var(--border-hairline);
+    background: var(--surface-2);
+    color: var(--text-primary);
+    font-weight: 600;
+    cursor: pointer;
+  }
+}
+
+/* ==========================================================================
+   Motion
+   ========================================================================== */
+
 @keyframes ping {
   75%, 100% {
     transform: scale(2.15);
     opacity: 0;
+  }
+}
+
+@keyframes status-dot-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--dot) 60%, transparent);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(0.9);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--dot) 0%, transparent);
   }
 }
 
@@ -274,6 +711,7 @@ body {
   animation: buoySonarPulse 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
 
+/* Legacy unconditional pulse — prefer .status-dot with a data-state */
 .live-dot-pulse {
   display: inline-block;
   width: 7px;
@@ -283,7 +721,7 @@ body {
   animation: pulse-dot 2s infinite;
 }
 
-/* Megathrust Drill Epicenter Leaflet Marker Pulse */
+/* Drill epicentre marker */
 @keyframes drillEpicenterPulse {
   0% {
     transform: scale(0.88);
@@ -308,15 +746,18 @@ body {
   animation: drillEpicenterPulse 1.5s infinite;
 }
 
-/* Theme-Aware Frosted Leaflet Integration */
+/* ==========================================================================
+   Leaflet — unlayered and !important on purpose: these must beat leaflet.css
+   ========================================================================== */
+
 .leaflet-container {
   background: var(--surface-canvas) !important;
   font-family: var(--font-sans) !important;
 }
 
-/* Keep Leaflet built-in layer & zoom controls clear of floating Glass Header */
+/* Keep Leaflet's own controls clear of the floating masthead (and drill strip) */
 .leaflet-top {
-  top: 84px !important;
+  top: var(--hud-top) !important;
 }
 
 .leaflet-left {
@@ -326,7 +767,6 @@ body {
 .leaflet-popup-content-wrapper,
 .leaflet-popup-tip {
   background: var(--surface-elevated) !important;
-  backdrop-filter: blur(16px) !important;
   color: var(--text-primary) !important;
   border: 1px solid var(--glass-border);
   box-shadow: var(--shadow-elevated) !important;
@@ -339,8 +779,7 @@ body {
 
 .leaflet-control-layers,
 .leaflet-bar a {
-  background: var(--glass-surface) !important;
-  backdrop-filter: blur(16px) !important;
+  background: var(--hud-solid) !important;
   color: var(--text-primary) !important;
   border-color: var(--glass-border) !important;
 }
@@ -349,9 +788,14 @@ body {
   border-top-color: var(--border-hairline) !important;
 }
 
+/* ==========================================================================
+   Scrollbars
+   ========================================================================== */
+
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
+
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
@@ -371,48 +815,39 @@ body {
   border-radius: 9999px;
 }
 
-/* Modal & Seismogram Inspection Helpers */
-.volcano-card__level-badge {
-  display: inline-flex;
-  align-items: center;
-  border-radius: 6px;
-  font-family: var(--font-mono);
-  font-weight: 700;
-  border: 1px solid var(--border-hairline);
-}
-
-.volcano-card__level-badge--awas {
-  background: var(--sev-critical-bg);
-  color: var(--sev-critical);
-  border-color: var(--sev-critical-border);
-}
-
-.volcano-card__level-badge--siaga {
-  background: var(--sev-high-bg);
-  color: var(--sev-high);
-  border-color: var(--sev-high-border);
-}
-
-.volcano-card__level-badge--waspada {
-  background: var(--sev-elevated-bg);
-  color: var(--sev-elevated);
-  border-color: var(--sev-elevated-border);
-}
-
-.volcano-lightbox__close-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: 8px;
-  border: 1px solid var(--border-hairline);
-  background: var(--surface-2);
-  color: var(--text-primary);
-  font-weight: 600;
-  cursor: pointer;
-}
-
 @media (max-width: 900px) {
   .seismogram-modal__body {
     grid-template-columns: 1fr !important;
+  }
+}
+
+/* ==========================================================================
+   User preferences
+   ========================================================================== */
+
+/* Decorative motion is optional; the data it decorates is not */
+@media (prefers-reduced-motion: reduce) {
+  html,
+  body {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass-hud {
+    background: var(--surface-1);
+    backdrop-filter: none;
+  }
+
+  .hud-solid {
+    background: var(--surface-1);
   }
 }

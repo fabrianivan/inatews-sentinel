@@ -10,6 +10,10 @@ export interface SeismicEvent {
   pga: number;
   fault_zone: string;
   timestamp: string;
+  /** True when this entry is a built-in placeholder, not something a feed reported. */
+  seeded?: boolean;
+  /** BMKG "Potensi" text for the event, when the feed carried one. */
+  potensi?: string;
 }
 
 export interface StationEvent {
@@ -153,6 +157,9 @@ export interface SystemStatus {
   last_update: string;
   tsunami_scenario?: TsunamiScenario;
   latest_ai?: AIAnalysis;
+  /** Plain-language facts behind `risk_level` (standalone path only). */
+  risk_reasons?: string[];
+  provenance?: ProvenanceMap;
 }
 
 export interface LiveEvent {
@@ -210,6 +217,8 @@ export interface BMKGGempaDetail {
   Potensi: string;
   Dirasakan?: string;
   Shakemap?: string;
+  /** True when this record is a built-in placeholder, not BMKG's latest report. */
+  seeded?: boolean;
 }
 
 export interface RealtimeEarthquakesData {
@@ -217,6 +226,8 @@ export interface RealtimeEarthquakesData {
   recent_bmkg: SeismicEvent[];
   recent_usgs: SeismicEvent[];
   timestamp: string;
+  /** Per-feed fetch outcome; absent when the payload comes from the Go backend. */
+  provenance?: ProvenanceMap;
 }
 
 export interface VolcanoEruption {
@@ -234,6 +245,8 @@ export interface VolcanoEruption {
   alert_level: string;
   recommendation: string;
   timestamp: string;
+  /** Where the record came from; absent on Go-backend payloads. */
+  source?: 'PVMBG_LIVE' | 'SEEDED';
 }
 
 export interface AgentThought {
@@ -265,3 +278,29 @@ export interface AgentState {
   recent_thoughts: AgentThought[];
   recent_actions: AgentTacticalAction[];
 }
+
+/** Upstream feeds the dashboard reads. */
+export type FeedId =
+  | 'bmkg_latest'
+  | 'bmkg_recent'
+  | 'usgs'
+  | 'ioc'
+  | 'open_meteo'
+  | 'pvmbg'
+  | 'ai';
+
+/**
+ * Outcome of the last fetch of a feed:
+ *  - `live`   the upstream answered and its data is what is shown
+ *  - `seed`   the upstream failed or was empty; built-in placeholder data is shown
+ *  - `failed` the upstream failed and nothing is shown for it
+ */
+export type FeedState = 'live' | 'seed' | 'failed';
+
+export interface FeedProvenance {
+  state: FeedState;
+  /** ISO time of the fetch attempt. */
+  fetched_at: string;
+}
+
+export type ProvenanceMap = Partial<Record<FeedId, FeedProvenance>>;
