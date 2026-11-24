@@ -18,6 +18,30 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## Location notifications and Web Push
+
+The dashboard notifies about BMKG tsunami statements and nearby BMKG earthquakes / MAGMA
+eruptions as browser notifications (service worker `public/sw.js`). With Web Push the server
+keeps sending them while every dashboard tab is closed. Push needs these server variables
+(in `.env.local` for development; never commit the private key):
+
+| Variable | Meaning |
+| --- | --- |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | Key pair, generate with `npx web-push generate-vapid-keys` |
+| `VAPID_SUBJECT` | Contact for push services: your own `mailto:` or `https:` address |
+| `PUSH_STORE_PATH` | Optional; default `.data/push-subscriptions.json` |
+| `CRON_SECRET` | Optional; enables `GET /api/push/check` (Bearer token) for hosts without a long-running process |
+
+Without the keys, notifications still work while a tab is open. A long-running server
+(`next start`, Docker) checks the feeds every minute on its own (`src/instrumentation.ts`);
+in Docker, mount a volume on `/app/.data` so subscriptions survive a restart. A serverless
+host has no lasting disk or process: it needs a database for the subscriptions and a
+scheduler calling `/api/push/check`.
+
+The server stores, per subscribed browser, only the push address, radius, kinds and either a
+chosen city or the browser position rounded to ±20 km; it is deleted when notifications are
+switched off.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

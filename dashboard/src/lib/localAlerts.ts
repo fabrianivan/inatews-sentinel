@@ -371,3 +371,163 @@ export function parseAlertSettings(json: string | null | undefined): LocalAlertS
     return DEFAULT_ALERT_SETTINGS;
   }
 }
+
+// ---------------------------------------------------------------------------
+// The browser notification, and where a click on it leads
+// ---------------------------------------------------------------------------
+
+/** Where a click on a notification leads on the dashboard. */
+export interface NotificationTarget {
+  kind: LocalAlertKind | 'test';
+  point?: GeoPoint;
+  /** Catalogue name: the click opens that volcano's panel. */
+  volcanoName?: string;
+}
+
+/** The official pages a notification links to; the service worker opens no other site. */
+export const OFFICIAL_SOURCE_URL = {
+  bmkg: 'https://www.bmkg.go.id/gempabumi',
+  magma: 'https://magma.esdm.go.id',
+} as const;
+
+export const NOTIFICATION_ICON = '/notification-icon.png';
+
+export interface BrowserNotification {
+  title: string;
+  options: {
+    body: string;
+    /** One notification per event: a repeat replaces it instead of stacking. */
+    tag: string;
+    lang: 'id';
+    icon: string;
+    /** Stays until dismissed (a tsunami statement). */
+    requireInteraction: boolean;
+    /** The event's own time, which the browser shows. */
+    timestamp: number;
+    data: { url: string; sourceUrl: string | null; target: NotificationTarget };
+    /** Buttons on the notification (where the browser shows them). */
+    actions: { action: 'peta' | 'sumber'; title: string }[];
+  };
+}
+
+/** The dashboard address that shows `target` — what the service worker opens when no dashboard tab is left. */
+export function targetUrl(target: NotificationTarget): string {
+  const params = new URLSearchParams();
+  if (target.kind === 'volcano' && target.volcanoName) {
+    params.set('lihat', 'gunung');
+    params.set('nama', target.volcanoName);
+  } else if (target.point) {
+    params.set('lihat', 'peta');
+    params.set('lat', target.point.lat.toFixed(3));
+    params.set('lon', target.point.lon.toFixed(3));
+  } else {
+    params.set('lihat', 'notifikasi');
+  }
+  return `/?${params.toString()}`;
+}
+
+function finiteParam(params: URLSearchParams, key: string): number | null {
+  const raw = params.get(key);
+  if (raw === null || raw.trim() === '') return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** Reads a target back from a dashboard address (`location.search`); anything malformed is ignored. */
+export function targetFromSearch(search: string): NotificationTarget | null {
+  const params = new URLSearchParams(search);
+  switch (params.get('lihat')) {
+    case 'gunung': {
+      const name = (params.get('nama') ?? '').trim();
+      const volcano = name ? findVolcanoLocation(name) : null;
+      // Only a catalogue volcano, by its own name — never a near match.
+      return volcano && volcano.name.toLowerCase() === name.toLowerCase()
+        ? { kind: 'volcano', volcanoName: volcano.name }
+        : null;
+    }
+    case 'peta': {
+      const lat = finiteParam(params, 'lat');
+      const lon = finiteParam(params, 'lon');
+      const point = lat !== null && lon !== null ? { lat, lon } : null;
+      return point && isGeoPoint(point) ? { kind: 'quake', point } : null;
+    }
+    case 'notifikasi':
+      return { kind: 'test' };
+    default:
+      return null;
+  }
+}
+
+/** What the browser is asked to show for an alert: its words, its event time, and where a click leads. */
+export function browserNotification(alert: LocalAlert): BrowserNotification {
+  const isTest = alert.id.startsWith('test:');
+  const target: NotificationTarget = isTest
+    ? { kind: 'test' }
+    : {
+        kind: alert.kind,
+        ...(alert.point ? { point: alert.point } : {}),
+        ...(alert.volcanoName ? { volcanoName: alert.volcanoName } : {}),
+      };
+  const sourceUrl = isTest ? null : alert.kind === 'volcano' ? OFFICIAL_SOURCE_URL.magma : OFFICIAL_SOURCE_URL.bmkg;
+  return {
+    title: alert.title,
+    options: {
+      body: alert.body,
+      tag: alert.id,
+      lang: 'id',
+      icon: NOTIFICATION_ICON,
+      requireInteraction: alert.sticky,
+      timestamp: alert.atMs,
+      data: { url: targetUrl(target), sourceUrl, target },
+      actions: isTest
+        ? []
+        : [
+            { action: 'peta', title: alert.kind === 'volcano' ? 'Buka gunung di peta' : 'Lihat di peta' },
+            { action: 'sumber', title: alert.kind === 'volcano' ? 'Buka MAGMA' : 'Buka BMKG' },
+          ],
+    },
+  };
+}
+
+/** A click target as a message hands it over, checked: only known kinds, a real position, a short name. */
+export function parseNotificationTarget(value: unknown): NotificationTarget | null {
+  if (value === null || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const kinds: NotificationTarget['kind'][] = ['tsunami', 'quake', 'volcano', 'test'];
+  const kind = kinds.find((item) => item === record.kind);
+  if (!kind) return null;
+  const target: NotificationTarget = { kind };
+  if (isGeoPoint(record.point)) target.point = { lat: record.point.lat, lon: record.point.lon };
+  if (typeof record.volcanoName === 'string' && record.volcanoName.length <= 60) {
+    const volcano = findVolcanoLocation(record.volcanoName);
+    if (volcano) target.volcanoName = volcano.name;
+  }
+  return target;
+}
+
+/** A pushed notification as the service worker reports it to an open tab, checked like the target. */
+export function parsePushedAlert(value: unknown): LocalAlert | null {
+  if (value === null || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const kinds: LocalAlertKind[] = ['tsunami', 'quake', 'volcano'];
+  const kind = kinds.find((item) => item === record.kind);
+  if (
+    !kind ||
+    typeof record.id !== 'string' ||
+    typeof record.title !== 'string' ||
+    typeof record.body !== 'string' ||
+    typeof record.atMs !== 'number' ||
+    !Number.isFinite(record.atMs)
+  ) {
+    return null;
+  }
+  return {
+    id: record.id.slice(0, 200),
+    kind,
+    title: record.title.slice(0, 200),
+    body: record.body.slice(0, 600),
+    sticky: kind === 'tsunami',
+    atMs: record.atMs,
+    distanceKm: null,
+  };
+}

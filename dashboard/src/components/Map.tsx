@@ -27,13 +27,13 @@ import {
 } from '@/lib/severity';
 import { formatDecimal, formatWibDateTime, toMillis } from '@/lib/time';
 import {
-  ASH_TRAJECTORY_DISCLAIMER,
   INDONESIAN_VOLCANOES,
   countEruptionReports,
   findVolcanoLocation,
-  getVolcanicAshTrajectory,
   type VolcanoLocation,
 } from '@/lib/volcanoData';
+import { useVona } from '@/hooks/useVona';
+import { VONA_COLOR_ID, vonaMapArrow } from '@/lib/vona';
 
 /**
  * Hide map labels that collide with a higher-priority label so the map stays legible
@@ -317,7 +317,7 @@ const LAYER_ROWS: { key: LayerKey; label: string; swatch: SwatchKind }[] = [
   { key: 'paluKoro', label: 'Sesar Palu-Koro', swatch: 'fault' },
   { key: 'regionalFaults', label: 'Busur Banda & Sesar Sorong', swatch: 'fault' },
   { key: 'volcanoes', label: 'Gunung api (katalog PVMBG)', swatch: 'volcano' },
-  { key: 'ash', label: 'Sebaran abu (ilustrasi)', swatch: 'ash' },
+  { key: 'ash', label: 'Arah abu (VONA)', swatch: 'ash' },
   { key: 'stations', label: 'Stasiun seismik (referensi)', swatch: 'station' },
   { key: 'buoys', label: 'Pelampung tsunami (ilustrasi)', swatch: 'buoy' },
 ];
@@ -676,7 +676,9 @@ function LayerSwatch({ kind }: { kind: SwatchKind }) {
       );
     case 'ash':
       return (
-        <span aria-hidden="true" className="mx-0.5 h-3 w-3 shrink-0 rounded-sm border border-dashed border-[var(--text-muted)]" />
+        <svg aria-hidden="true" viewBox="0 0 16 10" className="h-2.5 w-4 shrink-0 text-[var(--text-muted)]">
+          <path d="M1 5h12M9 1l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
       );
     case 'station':
       return <span aria-hidden="true" className="mx-1 h-2 w-2 shrink-0 bg-[var(--text-muted)]" />;
@@ -804,6 +806,16 @@ function MapKey({ isSimulasi, onClose }: { isSimulasi: boolean; onClose: () => v
         >
           Gunung api: I–IV = tingkat aktivitas PVMBG dari katalog, bukan pembacaan langsung — verifikasi di MAGMA.
           Titik biru = ada laporan erupsi MAGMA.
+        </KeyRow>
+        <KeyRow
+          symbol={
+            <svg width="30" height="12" viewBox="0 0 30 12" className="text-[var(--text-secondary)]">
+              <path d="M2 6h24M20 1.5 26 6l-6 4.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          }
+        >
+          Panah dari gunung terpilih — arah abu menurut VONA MAGMA (PVMBG) yang terbit ≤ 6 jam lalu. Hanya arah, tanpa
+          jarak.
         </KeyRow>
         {isSimulasi && (
           <KeyRow symbol={<span className="drill-chip">Latihan</span>}>
@@ -1302,76 +1314,79 @@ export default function Map({
     });
   }, [selectedVolcano, volcanoSignature, activeLayer.volcanoes]);
 
-  // 3.1 Ash fan for the selected volcano — a fixed illustration, never a forecast
+  // 3.1 Ash direction for the selected volcano — only from PVMBG's own VONA on MAGMA, under
+  //     six hours old, that reports an ash cloud and the compass points it moves to. A VONA
+  //     states no distance, so the arrows have one fixed length: they show direction only.
+  const ashVolcano = selectedVolcano && selectedVolcano !== 'BMKG_REGIONAL' ? selectedVolcano : null;
+  const { data: vonaData } = useVona(ashVolcano);
+  const vonaLatest = vonaData?.volcano?.latest ?? null;
   useEffect(() => {
     const layer = ashLayerRef.current;
     if (!layer) return;
 
     layer.clearLayers();
-    if (!activeLayer.ash || !selectedVolcano || selectedVolcano === 'BMKG_REGIONAL') return;
+    if (!activeLayer.ash || !ashVolcano || !vonaLatest) return;
 
-    const geo = findVolcanoLocation(selectedVolcano);
-    if (!geo) return;
+    const geo = findVolcanoLocation(ashVolcano);
+    const arrow = vonaMapArrow(vonaLatest, Date.now());
+    if (!geo || !arrow) return;
 
-    const ash = getVolcanicAshTrajectory(selectedVolcano);
     const [lat0, lon0] = geo.pos;
-
-    // Fan polygon around the wind azimuth (0 = N, 90 = E, 180 = S, 270 = W)
-    const centerAngle = ash.windDirectionDeg;
-    const spread = ash.coneSpreadDeg || 45;
-    const radiusKm = ash.hazardRadiusKm || 35;
-    const radiusDegLat = radiusKm / 111; // 1 deg lat ~ 111 km
     const cosLat = Math.max(0.2, Math.cos((lat0 * Math.PI) / 180));
-    const offset = (distanceDeg: number, angleDeg: number): [number, number] => {
-      const rad = (angleDeg * Math.PI) / 180;
-      return [lat0 + distanceDeg * Math.cos(rad), lon0 + (distanceDeg * Math.sin(rad)) / cosLat];
+    const offset = (km: number, bearingDeg: number): [number, number] => {
+      const rad = (bearingDeg * Math.PI) / 180;
+      return [lat0 + (km / 111) * Math.cos(rad), lon0 + ((km / 111) * Math.sin(rad)) / cosLat];
     };
+    const ARROW_KM = 32;
+    const HEAD_KM = 7;
 
-    const steps = 16;
-    const vertices: [number, number][] = [[lat0, lon0]];
-    for (let i = 0; i <= steps; i++) {
-      vertices.push(offset(radiusDegLat, centerAngle - spread / 2 + spread * (i / steps)));
-    }
+    const issuedMs = toMillis(vonaLatest.issued_at);
+    const top = vonaLatest.ash_top_asl_m;
+    const popup = popupHtml(
+      [
+        '<span class="t-micro">Arah abu · VONA MAGMA (PVMBG)</span>',
+        `<strong class="${POPUP_TITLE}">G. ${escapeHtml(geo.name)}</strong>`,
+        issuedMs !== null ? metaRow(`Diterbitkan ${escapeHtml(formatWibDateTime(issuedMs))}`) : '',
+        vonaLatest.color_code
+          ? metaRow(`Kode warna penerbangan: ${vonaLatest.color_code} (${VONA_COLOR_ID[vonaLatest.color_code]})`)
+          : '',
+        top !== null ? metaRow(`Puncak abu ±${top.toLocaleString('id-ID')} m dpl (perkiraan pengamat)`) : '',
+        vonaLatest.ash_direction ? metaRow(`“${escapeHtml(vonaLatest.ash_direction.sentence)}”`) : '',
+        metaRow('Panah hanya menunjukkan arah — VONA tidak menyebut jarak sebaran.'),
+        vonaLatest.url
+          ? `<a class="t-meta font-semibold text-[var(--accent)] hover:underline" href="${escapeHtml(vonaLatest.url)}" target="_blank" rel="noopener noreferrer">Buka VONA di MAGMA</a>`
+          : '',
+      ],
+      'min-w-[230px]'
+    );
 
-    const neutral = MAP_PALETTE[theme].neutral;
-    const disclaimer = escapeHtml(ASH_TRAJECTORY_DISCLAIMER);
-    L.polygon(vertices, {
-      color: neutral,
-      weight: 1.5,
-      opacity: 0.9,
-      dashArray: '6 4',
-      fillColor: neutral,
-      fillOpacity: 0.18,
-    })
-      .addTo(layer)
-      .bindPopup(
-        popupHtml(
-          [
-            `<span class="t-micro">Sebaran abu · ${disclaimer}</span>`,
-            `<strong class="${POPUP_TITLE}">G. ${escapeHtml(geo.name)}</strong>`,
-            metaRow(`Arah contoh: ${escapeHtml(ash.windDirectionCardinal)} (${ash.windDirectionDeg}°)`),
-            metaRow(
-              `Angin contoh: ${ash.windSpeedKts} knot (≈ ${Math.round(ash.windSpeedKts * 1.852)} km/jam)`
-            ),
-            metaRow(`Tinggi kolom contoh: ± ${ash.plumeHeightMeters.toLocaleString('id-ID')} m`),
-            metaRow(`Jangkauan gambar: ${radiusKm} km`),
-            metaRow('Nilai tetap untuk ilustrasi, bukan prakiraan. Informasi abu resmi: VONA di MAGMA Indonesia (PVMBG).'),
-          ],
-          'min-w-[230px]'
-        )
-      );
+    const color = MAP_PALETTE[theme].neutral;
+    arrow.bearings.forEach((bearing) => {
+      const tip = offset(ARROW_KM, bearing);
+      // A solid line: this is a report, not an example (dashed lines on this map are examples)
+      L.polyline([[lat0, lon0], tip], { color, weight: 3, opacity: 0.95 }).addTo(layer).bindPopup(popup);
+      const back = (side: number) => {
+        const rad = ((bearing + 180 + side * 28) * Math.PI) / 180;
+        return [tip[0] + (HEAD_KM / 111) * Math.cos(rad), tip[1] + ((HEAD_KM / 111) * Math.sin(rad)) / cosLat] as [number, number];
+      };
+      L.polyline([back(-1), tip, back(1)], { color, weight: 3, opacity: 0.95 }).addTo(layer).bindPopup(popup);
+    });
 
-    // The disclaimer sits on the map itself, not only behind a click
-    L.marker(offset(radiusDegLat * 0.6, centerAngle), {
+    // Its source and time sit on the map itself, at the end of the (first) arrow
+    L.marker(offset(ARROW_KM + 10, arrow.bearings[0]), {
       icon: L.divIcon({
         className: 'ash-wind-arrow',
-        html: `<div style="position:absolute;left:0;top:0;transform:translate(-50%,-50%);pointer-events:none;${MAP_LABEL_STYLE}border:1px dashed var(--border-strong);">Abu · ${disclaimer}</div>`,
+        html: `<div style="position:absolute;left:0;top:0;transform:translate(-50%,-50%);pointer-events:none;${MAP_LABEL_STYLE}">${escapeHtml(arrow.title)}</div>`,
         iconSize: [0, 0],
       }),
       interactive: false,
       zIndexOffset: 700,
     }).addTo(layer);
-  }, [selectedVolcano, activeLayer.ash, theme]);
+
+    // The arrow leaves the map when the notice passes six hours, even between polls
+    const timer = setTimeout(() => layer.clearLayers(), Math.max(0, arrow.expiresAtMs - Date.now()));
+    return () => clearTimeout(timer);
+  }, [ashVolcano, vonaLatest, activeLayer.ash, theme]);
 
   // 4. Handle volcano selection camera flyTo: the marker is brought to the middle of the
   //    part of the map the HUD and the volcano panel leave open. It flies when another

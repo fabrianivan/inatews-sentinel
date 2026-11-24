@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# push subscriptions kept by the server (src/lib/server/pushStore.ts)
+/.data/

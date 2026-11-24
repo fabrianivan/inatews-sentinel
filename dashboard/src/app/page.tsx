@@ -31,9 +31,8 @@ import type {
   TsunamiScenario,
   VolcanoEruption,
 } from '@/lib/types';
-import type { LocalAlert } from '@/lib/localAlerts';
+import type { LocalAlert, NotificationTarget } from '@/lib/localAlerts';
 import ActivityStrip from '@/components/ActivityStrip';
-import AlertToasts from '@/components/AlertToasts';
 import AIPanel from '@/components/AIPanel';
 import DrillStrip from '@/components/DrillStrip';
 import EventStream from '@/components/EventStream';
@@ -570,28 +569,6 @@ export default function Home() {
 
   const noticeInForce = isNoticeInForce(notice);
 
-  // ---- Location-based notifications ----------------------------------------
-  // Every delivered alert pops up inside the dashboard, which needs no browser permission;
-  // the desktop notification goes out alongside when the browser allows it. Near-field
-  // earthquakes and eruptions sound the tone (a tsunami statement has its own).
-  const [toasts, setToasts] = useState<LocalAlert[]>([]);
-  const handleLocalAlert = useCallback(
-    (alert: LocalAlert) => {
-      setToasts((previous) => [alert, ...previous.filter((item) => item.id !== alert.id)].slice(0, 4));
-      if (alert.kind !== 'tsunami') playChime('high');
-    },
-    [playChime]
-  );
-  const dismissToast = useCallback((id: string) => setToasts((previous) => previous.filter((item) => item.id !== id)), []);
-  const localAlerts = useLocalAlerts({
-    latest: realQuakes?.latest_bmkg ?? null,
-    recent: realQuakes?.recent_bmkg ?? NO_EVENTS,
-    notice,
-    volcanoReports: volcanoes,
-    paused: dashboardMode === 'SIMULASI',
-    onAlert: handleLocalAlert,
-  });
-
   // ---- Feed health and attention ------------------------------------------
   const feeds: FeedHealth[] = useMemo(
     () =>
@@ -1079,15 +1056,35 @@ export default function Home() {
   }, []);
   const handleOpenSources = useCallback(() => openPanel('sumber'), [openPanel]);
   const handleOpenAlerts = useCallback(() => openPanel('notifikasi'), [openPanel]);
-  // A pop-up's "Lihat di peta": an eruption opens its volcano's panel, anything else is flown to.
-  const handleShowAlertOnMap = useCallback(
+
+  // ---- Location-based notifications ----------------------------------------
+  // Shown by the browser (see hooks/useLocalAlerts). Near-field earthquakes and eruptions also
+  // sound the dashboard's tone (a tsunami statement has its own). A click on a notification
+  // shows its event: an eruption opens its volcano's panel, anything else is flown to, and the
+  // test notification opens the notification panel.
+  const handleLocalAlert = useCallback(
     (alert: LocalAlert) => {
-      if (alert.kind === 'volcano' && alert.volcanoName) handleSelectVolcano(alert.volcanoName);
-      else if (alert.point) handleFocusMap(alert.point.lat, alert.point.lon);
-      dismissToast(alert.id);
+      if (alert.kind !== 'tsunami') playChime('high');
     },
-    [handleSelectVolcano, handleFocusMap, dismissToast]
+    [playChime]
   );
+  const handleOpenNotification = useCallback(
+    (target: NotificationTarget) => {
+      if (target.kind === 'volcano' && target.volcanoName) handleSelectVolcano(target.volcanoName);
+      else if (target.point) handleFocusMap(target.point.lat, target.point.lon);
+      else openPanel('notifikasi');
+    },
+    [handleSelectVolcano, handleFocusMap, openPanel]
+  );
+  const localAlerts = useLocalAlerts({
+    latest: realQuakes?.latest_bmkg ?? null,
+    recent: realQuakes?.recent_bmkg ?? NO_EVENTS,
+    notice,
+    volcanoReports: volcanoes,
+    paused: dashboardMode === 'SIMULASI',
+    onAlert: handleLocalAlert,
+    onOpen: handleOpenNotification,
+  });
 
   const seismographProps = {
     seismicEnergy: isDrill ? activePhase.seismicEnergy : 1.2,
@@ -1180,7 +1177,7 @@ export default function Home() {
   const analysisRequest = analysisFor !== null && analysisFor.name === hubVolcano ? analysisFor.nonce : 0;
 
   const panelIcon = (id: PanelId, Icon: LucideIcon): LucideIcon =>
-    id === 'notifikasi' && localAlerts.settings.enabled ? BellRing : Icon;
+    id === 'notifikasi' && localAlerts.active ? BellRing : Icon;
 
   // Below `lg` a dock icon opens its topic, or closes it when it is already up. An open warning
   // card folds to its header first, so the panel asked for does not stay hidden behind it.
@@ -1295,7 +1292,7 @@ export default function Home() {
           isAudioMuted={isAudioMuted}
           onToggleAudio={() => setIsAudioMuted((prev) => !prev)}
           onOpenSources={handleOpenSources}
-          alertsEnabled={localAlerts.settings.enabled}
+          alertsEnabled={localAlerts.active}
           onOpenAlerts={handleOpenAlerts}
         />
         {isDrill && (
@@ -1523,7 +1520,6 @@ export default function Home() {
         )}
       </section>
 
-      <AlertToasts alerts={toasts} onDismiss={dismissToast} onShowOnMap={handleShowAlertOnMap} />
     </div>
   );
 }

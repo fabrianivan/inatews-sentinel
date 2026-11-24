@@ -3,12 +3,17 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_ALERT_SETTINGS,
   EMPTY_LEDGER,
+  NOTIFICATION_ICON,
+  OFFICIAL_SOURCE_URL,
   QUAKE_FRESH_MS,
   VOLCANO_QUIET_MS,
+  browserNotification,
   collectLocalAlerts,
   parseAlertSettings,
   parseLedger,
   takeNewAlerts,
+  targetFromSearch,
+  targetUrl,
   type LocalAlertInput,
   type LocalAlertSettings,
 } from '../localAlerts';
@@ -298,4 +303,50 @@ test('stored settings and ledger are read defensively', () => {
   // Old entries are dropped as the ledger is used.
   const stale = { seen: { old: NOW - 72 * 60 * MINUTE, recent: NOW - MINUTE }, lastByKey: {} };
   assert.deepEqual(Object.keys(takeNewAlerts([], stale, NOW).ledger.seen), ['recent']);
+});
+
+test('a browser notification carries the event, its official source and where a click leads', () => {
+  const [quakeAlert] = collectLocalAlerts(input({ latest: quake() }));
+  const quakeNote = browserNotification(quakeAlert);
+  assert.equal(quakeNote.title, quakeAlert.title);
+  assert.equal(quakeNote.options.body, quakeAlert.body);
+  assert.equal(quakeNote.options.tag, quakeAlert.id);
+  assert.equal(quakeNote.options.icon, NOTIFICATION_ICON);
+  assert.equal(quakeNote.options.timestamp, quakeAlert.atMs);
+  assert.equal(quakeNote.options.requireInteraction, false);
+  assert.equal(quakeNote.options.data.sourceUrl, OFFICIAL_SOURCE_URL.bmkg);
+  assert.deepEqual(quakeNote.options.actions.map((action) => action.action), ['peta', 'sumber']);
+  assert.match(quakeNote.options.data.url, /^\/\?lihat=peta&lat=-7\.050&lon=106\.600$/);
+
+  const [eruptionAlert] = collectLocalAlerts(
+    input({ location: LUMAJANG, volcanoReports: [eruption('Semeru', 20 * MINUTE)] })
+  );
+  const eruptionNote = browserNotification(eruptionAlert);
+  assert.equal(eruptionNote.options.data.sourceUrl, OFFICIAL_SOURCE_URL.magma);
+  assert.equal(eruptionNote.options.data.url, '/?lihat=gunung&nama=Semeru');
+  assert.equal(eruptionNote.options.actions[1].title, 'Buka MAGMA');
+
+  // A test notification links nowhere official and offers no buttons.
+  const test = browserNotification({ ...quakeAlert, id: 'test:1' });
+  assert.equal(test.options.data.sourceUrl, null);
+  assert.deepEqual(test.options.actions, []);
+  assert.equal(test.options.data.url, '/?lihat=notifikasi');
+});
+
+test('a click target survives the trip through the dashboard address, and nothing else gets in', () => {
+  assert.deepEqual(targetFromSearch(targetUrl({ kind: 'quake', point: { lat: -7.05, lon: 106.6 } }).slice(1)), {
+    kind: 'quake',
+    point: { lat: -7.05, lon: 106.6 },
+  });
+  assert.deepEqual(targetFromSearch('?lihat=gunung&nama=Semeru'), { kind: 'volcano', volcanoName: 'Semeru' });
+  assert.deepEqual(targetFromSearch('?lihat=notifikasi'), { kind: 'test' });
+
+  assert.equal(targetFromSearch(''), null);
+  assert.equal(targetFromSearch('?lihat=peta&lat=95&lon=10'), null);
+  assert.equal(targetFromSearch('?lihat=peta&lat=&lon=10'), null);
+  assert.equal(targetFromSearch('?lihat=peta&lat=abc&lon=10'), null);
+  // Only a catalogue volcano by its own name: no near match, no free text.
+  assert.equal(targetFromSearch('?lihat=gunung&nama=Atlantis'), null);
+  assert.equal(targetFromSearch('?lihat=gunung&nama=<script>'), null);
+  assert.equal(targetFromSearch('?lihat=sesuatu'), null);
 });

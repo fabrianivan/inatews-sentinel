@@ -13,7 +13,7 @@ import {
   LocateFixed,
   Send,
 } from 'lucide-react';
-import type { AlertPermission, LocalAlertsControl, LocationState } from '@/hooks/useLocalAlerts';
+import type { AlertPermission, LocalAlertsControl, LocationState, PushState } from '@/hooks/useLocalAlerts';
 import { RADIUS_OPTIONS_KM, type LocalAlert } from '@/lib/localAlerts';
 import { PLACES, PLACE_REGIONS } from '@/lib/places';
 import { formatDecimal, formatWibTime } from '@/lib/time';
@@ -32,23 +32,35 @@ const KIND_LABEL: Record<LocalAlert['kind'], string> = {
   volcano: 'Erupsi · MAGMA',
 };
 
-const DESKTOP_STATUS: Record<AlertPermission, { state: CheckState; text: string; hint?: string }> = {
-  granted: { state: 'ok', text: 'Diizinkan' },
-  default: { state: 'pending', text: 'Belum diizinkan' },
+const BROWSER_STATUS: Record<AlertPermission, { state: CheckState; text: string; hint?: string }> = {
+  granted: { state: 'ok', text: 'Diizinkan — notifikasi muncul dari browser, juga saat tab ini di latar belakang.' },
+  default: { state: 'pending', text: 'Belum diizinkan — browser akan bertanya saat notifikasi diaktifkan.' },
   denied: {
     state: 'blocked',
-    text: 'Diblokir oleh peramban ini',
-    hint: 'Izinkan lewat ikon gembok di bilah alamat, atau buka dasbor di Chrome, Edge, Firefox atau Safari. Peramban di dalam aplikasi tidak menampilkan notifikasi desktop.',
+    text: 'Diblokir oleh browser ini',
+    hint: 'Izinkan lewat ikon gembok di bilah alamat → Notifikasi → Izinkan. Browser di dalam aplikasi (seperti panel pratinjau) tidak bisa menampilkan notifikasi: buka dasbor di Chrome, Edge, Firefox atau Safari.',
   },
-  unsupported: { state: 'blocked', text: 'Tidak didukung peramban ini' },
+  unsupported: { state: 'blocked', text: 'Browser ini tidak mendukung notifikasi web.' },
+};
+
+const PUSH_STATUS: Record<PushState, { state: CheckState; text: string }> = {
+  pending: { state: 'busy', text: 'Menyiapkan langganan push…' },
+  working: { state: 'busy', text: 'Menyiapkan langganan push…' },
+  on: { state: 'ok', text: 'Aktif — server dasbor mengirim notifikasi walau semua tab dasbor ditutup.' },
+  unavailable: {
+    state: 'blocked',
+    text: 'Belum disiapkan di server ini (kunci VAPID belum diatur) — notifikasi hanya selama tab terbuka.',
+  },
+  unsupported: { state: 'blocked', text: 'Browser ini tidak mendukung push — notifikasi hanya selama tab terbuka.' },
+  failed: { state: 'blocked', text: 'Gagal berlangganan push — notifikasi hanya selama tab terbuka.' },
 };
 
 const BROWSER_LOCATION_STATUS: Record<Exclude<LocationState, 'ready'>, { state: CheckState; text: string }> = {
   idle: { state: 'pending', text: 'Belum ada — pilih kota di bawah' },
-  locating: { state: 'busy', text: 'Mencari lokasi peramban…' },
-  denied: { state: 'blocked', text: 'Lokasi peramban diblokir — pilih kota di bawah' },
-  unavailable: { state: 'blocked', text: 'Lokasi peramban tidak tersedia — pilih kota di bawah' },
-  unsupported: { state: 'blocked', text: 'Peramban tidak menyediakan lokasi — pilih kota di bawah' },
+  locating: { state: 'busy', text: 'Mencari lokasi browser…' },
+  denied: { state: 'blocked', text: 'Lokasi browser diblokir — pilih kota di bawah' },
+  unavailable: { state: 'blocked', text: 'Lokasi browser tidak tersedia — pilih kota di bawah' },
+  unsupported: { state: 'blocked', text: 'Browser tidak menyediakan lokasi — pilih kota di bawah' },
 };
 
 function formatAccuracy(meters: number | null): string {
@@ -109,16 +121,19 @@ const linkButton =
  * notified. Facts from BMKG and MAGMA only — not a warning service.
  */
 export default function LocalAlertsPanel({ alerts, isDrill }: LocalAlertsPanelProps) {
-  const { settings, permission, locationState, location, place, origin, delivered } = alerts;
+  const { settings, permission, active, locationState, location, place, origin, delivered, deliveryError, push } = alerts;
   const { enabled } = settings;
   const [showInfo, setShowInfo] = useState(false);
 
-  const desktop = DESKTOP_STATUS[permission];
+  const browser = BROWSER_STATUS[permission];
+  const blocked = permission === 'denied' || permission === 'unsupported';
   const chip = !enabled
     ? { tone: 'unknown', text: 'Nonaktif' }
-    : origin
-      ? { tone: 'rutin', text: 'Aktif' }
-      : { tone: 'unknown', text: 'Aktif · tanpa lokasi' };
+    : !active
+      ? { tone: 'unknown', text: 'Diblokir browser' }
+      : origin
+        ? { tone: 'rutin', text: 'Aktif' }
+        : { tone: 'unknown', text: 'Aktif · tanpa lokasi' };
 
   let locationRow: { state: CheckState; text: ReactNode };
   if (place) {
@@ -132,7 +147,7 @@ export default function LocalAlertsPanel({ alerts, isDrill }: LocalAlertsPanelPr
             {formatDecimal(Math.abs(location.point.lat), 2)}° {location.point.lat < 0 ? 'LS' : 'LU'} ·{' '}
             {formatDecimal(Math.abs(location.point.lon), 2)}° {location.point.lon < 0 ? 'BB' : 'BT'}
           </span>
-          {formatAccuracy(location.accuracyM)} · peramban, {formatWibTime(location.atMs, { seconds: false })}
+          {formatAccuracy(location.accuracyM)} · browser, {formatWibTime(location.atMs, { seconds: false })}
         </>
       ),
     };
@@ -180,12 +195,15 @@ export default function LocalAlertsPanel({ alerts, isDrill }: LocalAlertsPanelPr
             erupsi MAGMA hanya bila berada dalam radius dari lokasi yang dipilih.
           </p>
           <p>
-            Setiap notifikasi muncul sebagai pop-up di dasbor, dan juga di desktop bila peramban mengizinkan — hanya
-            selama tab ini terbuka.
+            Notifikasi ditampilkan oleh browser. Dengan push, server dasbor memeriksa BMKG dan MAGMA tiap menit dan
+            mengirimnya walau semua tab dasbor ditutup; tanpa push, notifikasi hanya muncul selama dasbor terbuka di
+            salah satu tab. Klik notifikasi untuk melihat kejadiannya di peta, atau tombol BMKG/MAGMA untuk sumber
+            resminya.
           </p>
           <p>
-            Lokasi peramban dipakai di perangkat ini saja dan tidak dikirim ke server mana pun. Kota pilihan disimpan di
-            peramban ini.
+            Untuk push, server dasbor menyimpan alamat langganan push browser ini beserta pengaturannya: radius, jenis
+            kejadian, dan kota pilihan — atau lokasi browser yang dibulatkan ±20 km, tidak pernah lokasi persisnya.
+            Semuanya dihapus saat notifikasi dimatikan.
           </p>
         </div>
       )}
@@ -204,49 +222,58 @@ export default function LocalAlertsPanel({ alerts, isDrill }: LocalAlertsPanelPr
           <button
             type="button"
             onClick={() => void alerts.enable()}
-            className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-[var(--accent)] px-3.5 text-[13px] font-bold text-[var(--accent-ink)] hover:opacity-90"
+            disabled={blocked}
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-xl bg-[var(--accent)] px-3.5 text-[13px] font-bold text-[var(--accent-ink)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <BellRing className="h-3.5 w-3.5" aria-hidden="true" />
-            Aktifkan notifikasi
+            Aktifkan notifikasi browser
           </button>
         )}
         <button
           type="button"
-          onClick={alerts.sendTest}
-          title="Tampilkan satu notifikasi uji sekarang"
-          className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-[var(--border-strong)] px-3.5 text-[13px] font-semibold text-[var(--text-primary)] hover:border-[var(--accent-border)]"
+          onClick={() => void alerts.sendTest()}
+          disabled={blocked}
+          title={blocked ? 'Notifikasi diblokir oleh browser ini' : 'Tampilkan satu notifikasi uji dari browser sekarang'}
+          className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-[var(--border-strong)] px-3.5 text-[13px] font-semibold text-[var(--text-primary)] hover:border-[var(--accent-border)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Send className="h-3.5 w-3.5" aria-hidden="true" />
           Uji
         </button>
       </div>
 
-      <ul className="mt-3 divide-y divide-[var(--border-hairline)] border-y border-[var(--border-hairline)]" aria-label="Yang berjalan di peramban ini">
-        <CheckRow state="ok" label="Pop-up di dasbor">
-          Selalu, selama tab ini terbuka.
-        </CheckRow>
+      <ul className="mt-3 divide-y divide-[var(--border-hairline)] border-y border-[var(--border-hairline)]" aria-label="Yang berjalan di browser ini">
         <CheckRow
-          state={desktop.state}
-          label="Notifikasi desktop"
-          hint={desktop.hint}
+          state={deliveryError ? 'blocked' : browser.state}
+          label="Notifikasi browser"
+          hint={deliveryError ?? browser.hint}
           action={
             permission === 'default' ? (
-              <button type="button" onClick={() => void alerts.requestDesktop()} className={linkButton}>
+              <button type="button" onClick={() => void alerts.requestPermission()} className={linkButton}>
                 Izinkan
               </button>
             ) : undefined
           }
         >
-          {desktop.text}
+          {browser.text}
+        </CheckRow>
+        <CheckRow
+          state={active ? PUSH_STATUS[push].state : enabled ? 'blocked' : 'pending'}
+          label="Saat tab ditutup (push)"
+        >
+          {active
+            ? PUSH_STATUS[push].text
+            : enabled
+              ? 'Butuh izin notifikasi browser.'
+              : 'Ikut aktif bersama notifikasi browser.'}
         </CheckRow>
         <CheckRow
           state={locationRow.state}
           label="Lokasi"
           hint={
-            enabled && !origin ? 'Tanpa lokasi, hanya pernyataan potensi tsunami BMKG yang dinotifikasikan.' : undefined
+            active && !origin ? 'Tanpa lokasi, hanya pernyataan potensi tsunami BMKG yang dinotifikasikan.' : undefined
           }
           action={
-            enabled && !place && locationState !== 'locating' ? (
+            active && !place && locationState !== 'locating' ? (
               <button type="button" onClick={alerts.refreshLocation} className={linkButton}>
                 <LocateFixed className="h-3.5 w-3.5" aria-hidden="true" />
                 {locationState === 'ready' ? 'Perbarui' : 'Coba lagi'}
@@ -258,7 +285,7 @@ export default function LocalAlertsPanel({ alerts, isDrill }: LocalAlertsPanelPr
         </CheckRow>
       </ul>
 
-      {isDrill && enabled && (
+      {isDrill && active && (
         <p className="t-meta mt-2 text-[var(--text-muted)]">
           Selama simulasi berjalan, hanya pernyataan potensi tsunami BMKG yang dinotifikasikan.
         </p>
@@ -275,7 +302,7 @@ export default function LocalAlertsPanel({ alerts, isDrill }: LocalAlertsPanelPr
             onChange={(event) => alerts.setPlace(event.target.value || null)}
             className="t-body mt-1.5 min-h-9 w-full cursor-pointer rounded-xl border border-[var(--border-strong)] bg-[var(--surface-1)] px-2.5 text-[var(--text-primary)]"
           >
-            <option value="">Lokasi peramban (otomatis)</option>
+            <option value="">Lokasi browser (otomatis)</option>
             {PLACE_REGIONS.map((region) => (
               <optgroup key={region} label={region}>
                 {PLACES.filter((item) => item.region === region).map((item) => (
