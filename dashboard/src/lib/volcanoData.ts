@@ -186,7 +186,11 @@ function normalizeVolcanoName(name: string): string {
   return name.toLowerCase().trim().replace(/^g\.\s*/, '');
 }
 
-/** MAGMA PVMBG reports that belong to a catalogued volcano, in feed order (newest first). */
+/**
+ * Records in the loaded list that belong to a catalogued volcano, in feed order (newest
+ * first). The list may include built-in placeholder rows; `countEruptionReports` leaves
+ * those out.
+ */
 export function getVolcanoReports(
   volcano: VolcanoLocation,
   reports: VolcanoEruption[]
@@ -199,6 +203,11 @@ export function getVolcanoReports(
       (catalogueName.includes(feedName) || feedName.includes(catalogueName))
     );
   });
+}
+
+/** How many of a volcano's records are eruption reports — built-in placeholder rows are not. */
+export function countEruptionReports(volcano: VolcanoLocation, reports: VolcanoEruption[]): number {
+  return getVolcanoReports(volcano, reports).filter((report) => report.source !== 'SEEDED').length;
 }
 
 const ROUTINE_RECORD_PREFIX = 'routine-';
@@ -222,12 +231,14 @@ export function buildVolcanoInspectionReport(
   return {
     id: `${ROUTINE_RECORD_PREFIX}${volcano.name.toLowerCase().replace(/\s+/g, '-')}`,
     volcano_name: volcano.name,
-    time: 'Pemantauan rutin',
+    // Worded as what is known: the loaded list (MAGMA's newest reports, when it loaded at
+    // all) holds nothing for this volcano. Whether MAGMA has an older report is not known here.
+    time: 'Tanpa laporan',
     date: formatWibDate(now),
-    description: `Belum ada laporan erupsi baru dari MAGMA untuk G. ${volcano.name}. Catatan ini adalah contoh, bukan rekaman ${volcano.pgaStation}.`,
+    description: `Tidak ada laporan erupsi G. ${volcano.name} pada daftar yang termuat di dasbor ini. Catatan ini adalah contoh, bukan rekaman ${volcano.pgaStation}.`,
     amplitude: '15 mm',
     duration: '45 detik',
-    visual_ash: 'Tidak tersedia — belum ada laporan visual dari MAGMA',
+    visual_ash: 'Tidak tersedia — tidak ada laporan pada daftar yang termuat',
     author: 'Tidak ada (catatan contoh)',
     alert_level: volcano.defaultLevel,
     recommendation: 'Ikuti rekomendasi resmi PVMBG di MAGMA Indonesia (magma.esdm.go.id).',
@@ -258,10 +269,32 @@ export function volcanoRecordOrigin(report: Pick<VolcanoEruption, 'id' | 'source
   return 'backend';
 }
 
+/** Short provenance tag for a record. Only a report scraped from MAGMA may say LIVE. */
+export const VOLCANO_ORIGIN_LABEL: Record<VolcanoRecordOrigin, string> = {
+  live: 'MAGMA PVMBG · LIVE',
+  backend: 'Laporan erupsi · asal tidak dinyatakan',
+  seeded: 'Data cadangan · bukan laporan MAGMA',
+  routine: 'Contoh · tanpa laporan termuat',
+};
+
+/**
+ * The plain statement shown with a placeholder record, or null for a report —
+ * so no surface presents example amplitude and duration as a recording.
+ */
+export function placeholderRecordNotice(report: Pick<VolcanoEruption, 'id' | 'source'>): string | null {
+  switch (volcanoRecordOrigin(report)) {
+    case 'routine':
+      return 'Tidak ada laporan erupsi untuk gunung ini pada daftar yang termuat — nilai amplitudo/durasi di bawah adalah contoh, bukan rekaman. Periksa MAGMA Indonesia untuk laporan terkini.';
+    case 'seeded':
+      return 'MAGMA Indonesia tidak terjangkau — catatan ini data cadangan bawaan; nilai amplitudo/durasi di bawah adalah contoh, bukan rekaman.';
+    default:
+      return null;
+  }
+}
+
 /** True when the record's amplitude, duration and text are examples rather than a MAGMA report. */
 export function isPlaceholderRecord(report: Pick<VolcanoEruption, 'id' | 'source'>): boolean {
-  const origin = volcanoRecordOrigin(report);
-  return origin === 'routine' || origin === 'seeded';
+  return placeholderRecordNotice(report) !== null;
 }
 
 export function findVolcanoLocation(name: string): VolcanoLocation | null {

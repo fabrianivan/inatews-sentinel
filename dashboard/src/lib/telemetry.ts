@@ -4,12 +4,34 @@ import type {
   AgentTacticalAction,
   AgentThought,
   BMKGGempaDetail,
+  FeedProvenance,
+  FeedState,
   RealtimeEarthquakesData,
   SeismicEvent,
   SystemStatus,
   TsunamiScenario,
   VolcanoEruption,
 } from './types';
+import {
+  assessAttention,
+  attentionToRiskLevel,
+  ATTENTION_WINDOW_MS,
+  collectQuakeFacts,
+  type QuakeFeedHealth,
+} from './attention';
+import { toTone, TONE_LABEL } from './severity';
+import { formatWibDate, formatWibTime, toDate, toMillis } from './time';
+import { findTsunamiStatement } from './tsunamiNotice';
+import { findVolcanoLocation } from './volcanoData';
+import {
+  findCameraCards,
+  findSeismogramCard,
+  mediaCardLabel,
+  parseMagmaMediaCards,
+  type MagmaMediaCard,
+  type VolcanoMediaResponse,
+  type VolcanoMediaState,
+} from './volcanoMedia';
 
 export interface IOCStationReading {
   code: string;
@@ -23,8 +45,11 @@ export interface IOCStationReading {
   trend: 'NORMAL' | 'TSUNAMI SURGE';
   status: 'OPERATIONAL' | 'ALERT';
   isAnomaly: boolean;
+  /** ISO time of the station's last value in the IOC list, when IOC gave a usable one. */
   lastUpdated?: string;
   source: 'IOC_LIVE' | 'SEEDED';
+  /** Where `baseLevelMeters` comes from: IOC's last listed value, or a built-in constant. */
+  levelSource?: 'IOC_LASTVALUE' | 'BUILT_IN';
   keywords: string[];
 }
 
@@ -34,6 +59,13 @@ export interface OceanFeedResponse {
   live_count: number;
   anomaly_count: number;
   source: 'IOC_LIVE' | 'FALLBACK';
+  /**
+   * What the station levels are. Only the IOC station list is fetched, never a sea-level
+   * series, so a level is the station's last listed value or a built-in constant: a
+   * reference for display, not a live observation, and no anomaly is derived from it.
+   * Absent on Go-backend payloads.
+   */
+  level_kind?: 'reference';
   timestamp: string;
 }
 
@@ -57,10 +89,14 @@ export interface LiveTelemetrySnapshot {
   tsunami: TsunamiScenario | null;
 }
 
+/**
+ * Built-in placeholder set, served only when no quake feed answered. Every record is
+ * marked `seeded` so nothing downstream reads it as a report from BMKG or USGS.
+ */
 export const FALLBACK_EARTHQUAKES: RealtimeEarthquakesData = {
   latest_bmkg: {
-    Tanggal: 'Baseline Offline',
-    Jam: 'STANDBY',
+    Tanggal: 'Tidak tersedia',
+    Jam: '—',
     DateTime: new Date().toISOString(),
     Coordinates: '-6.92,105.49',
     Lintang: '6.92 LS',
@@ -68,8 +104,8 @@ export const FALLBACK_EARTHQUAKES: RealtimeEarthquakesData = {
     Magnitude: '3.8',
     Kedalaman: '25 km',
     Wilayah: 'Selat Sunda — Zona Pemantauan Subduksi Jawa-Sumatra',
-    Potensi: 'Tidak berpotensi tsunami (Data baseline standby)',
-    Dirasakan: 'II Sumur',
+    Potensi: '',
+    seeded: true,
   },
   recent_bmkg: [
     {
@@ -84,6 +120,7 @@ export const FALLBACK_EARTHQUAKES: RealtimeEarthquakesData = {
       pga: 0.66,
       fault_zone: '60 km TimurLaut RUTENG-MANGGARAI-NTT',
       timestamp: new Date(Date.now() - 3600000).toISOString(),
+      seeded: true,
     },
     {
       type: 'SEISMIC',
@@ -97,6 +134,7 @@ export const FALLBACK_EARTHQUAKES: RealtimeEarthquakesData = {
       pga: 0.68,
       fault_zone: '77 km Tenggara CILACAP-JATENG',
       timestamp: new Date(Date.now() - 7200000).toISOString(),
+      seeded: true,
     },
     {
       type: 'SEISMIC',
@@ -110,6 +148,7 @@ export const FALLBACK_EARTHQUAKES: RealtimeEarthquakesData = {
       pga: 0.38,
       fault_zone: '69 km TimurLaut KOBAGMA-PAPUAPGNGN',
       timestamp: new Date(Date.now() - 14400000).toISOString(),
+      seeded: true,
     },
   ],
   recent_usgs: [
@@ -125,6 +164,7 @@ export const FALLBACK_EARTHQUAKES: RealtimeEarthquakesData = {
       pga: 0.63,
       fault_zone: '154 km S of Sarangani, Philippines',
       timestamp: new Date(Date.now() - 1800000).toISOString(),
+      seeded: true,
     },
     {
       type: 'SEISMIC',
@@ -138,6 +178,7 @@ export const FALLBACK_EARTHQUAKES: RealtimeEarthquakesData = {
       pga: 0.45,
       fault_zone: '108 km SSW of Pagar Alam, Indonesia',
       timestamp: new Date(Date.now() - 5400000).toISOString(),
+      seeded: true,
     },
   ],
   timestamp: new Date().toISOString(),
@@ -182,15 +223,16 @@ export function parseBMKGCoords(str: string): { lat: number; lon: number } | nul
   return { lat, lon };
 }
 
+/** Shapes a feed-reported quake. Callers pass a magnitude and time the feed actually gave. */
 export function buildSeismicEvent(params: {
   magnitude: number;
   depth: number;
   latitude: number;
   longitude: number;
   faultZone: string;
-  timestamp?: string;
+  timestamp: string;
 }): SeismicEvent {
-  const mag = Number.isFinite(params.magnitude) ? params.magnitude : 4.5;
+  const mag = params.magnitude;
   const depth = Number.isFinite(params.depth) && params.depth > 0 ? params.depth : 10;
   const mmi = Math.min(12, Math.max(1, Math.round(mag * 1.5 - depth * 0.015)));
   const pga = (mag * 0.14) / (1.0 + depth * 0.01);
@@ -205,217 +247,513 @@ export function buildSeismicEvent(params: {
     mmi,
     pga: Math.max(0.001, pga),
     fault_zone: params.faultZone,
-    timestamp: params.timestamp || new Date().toISOString(),
+    timestamp: params.timestamp,
   };
 }
 
-type NextRequestInit = RequestInit & { next?: { revalidate?: number } };
+/** One upstream read: the parsed body (null on any failure) and when the request was really made. */
+export interface UpstreamRead {
+  body: unknown;
+  fetchedAt: string;
+  /** True when the caller stopped waiting (`waitMs`) while the request is still running. */
+  pending?: boolean;
+}
 
-function fetchRevalidated(url: string, timeoutMs: number, revalidate: number, headers?: HeadersInit) {
-  const init: NextRequestInit = {
-    headers,
-    signal: AbortSignal.timeout(timeoutMs),
-    next: { revalidate },
+export interface UpstreamOptions {
+  timeoutMs: number;
+  /** How long a good answer is reused before the upstream is asked again. */
+  ttlSeconds: number;
+  parse: 'json' | 'text';
+  headers?: HeadersInit;
+  /**
+   * How long the last good body may stand in for a failed read. Defaults to twice the TTL:
+   * long enough to absorb one slow or dropped response, short enough that an outage is
+   * reported within a minute or two.
+   */
+  staleIfErrorSeconds?: number;
+  /**
+   * How long a caller waits for a slow read before going on with the last good body (or,
+   * without one, a failure). The read itself keeps running until `timeoutMs` and serves
+   * later callers. For feeds that answer slowly and change rarely; by default a caller
+   * waits for the read.
+   */
+  waitMs?: number;
+}
+
+/** A failed read is retried this soon instead of being held for the whole interval. */
+const FAILED_READ_TTL_MS = 5_000;
+
+type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
+
+/**
+ * Reads upstream URLs through a short in-process memo, so the dashboard's own polling
+ * (several routes, every client, every 20 s) does not multiply into upstream requests.
+ *
+ * Next's data cache is deliberately not used: with `next.revalidate` it keeps serving the
+ * last good body for as long as revalidation fails, with nothing to say how old it is, so
+ * an outage reads as live data fetched just now. Here the tolerance is explicit and
+ * bounded: after a failed read the last good body stands in for `staleIfErrorSeconds`,
+ * always carrying the time of the request that really produced it; past that the read is
+ * reported as failed.
+ */
+export function createUpstreamReader(
+  fetchImpl: FetchLike = (url, init) => fetch(url, init),
+  now: () => number = Date.now
+): (url: string, options: UpstreamOptions) => Promise<UpstreamRead> {
+  const memo = new Map<string, { expiresAtMs: number; settled: boolean; read: Promise<UpstreamRead> }>();
+  const lastGood = new Map<string, { atMs: number; read: UpstreamRead }>();
+
+  /** The last good body, while it is still within the tolerance for this feed. */
+  const standIn = (url: string, options: UpstreamOptions): UpstreamRead | null => {
+    const previous = lastGood.get(url);
+    const graceMs = (options.staleIfErrorSeconds ?? options.ttlSeconds * 2) * 1000;
+    return previous && now() - previous.atMs <= graceMs ? previous.read : null;
   };
-  return fetch(url, init);
+
+  /**
+   * Hands a caller the read. For a feed with `waitMs` whose request is still running, the
+   * caller gets what is already known instead: the last good body straight away, or, with
+   * nothing known yet, a read marked `pending` once `waitMs` has passed.
+   */
+  const forCaller = (
+    url: string,
+    options: UpstreamOptions,
+    entry: { settled: boolean; read: Promise<UpstreamRead> }
+  ): Promise<UpstreamRead> => {
+    if (options.waitMs === undefined || entry.settled) return entry.read;
+    const known = standIn(url, options);
+    if (known) return Promise.resolve(known);
+    return new Promise((resolve) => {
+      const timer = setTimeout(
+        () => resolve({ body: null, fetchedAt: new Date(now()).toISOString(), pending: true }),
+        options.waitMs
+      );
+      // `read` never rejects: every failure inside it resolves to a stand-in or a failed read.
+      void entry.read.then((result) => {
+        clearTimeout(timer);
+        resolve(result);
+      });
+    });
+  };
+
+  return (url, options) => {
+    const startedMs = now();
+    const hit = memo.get(url);
+    if (hit && hit.expiresAtMs > startedMs) return forCaller(url, options, hit);
+
+    const fetchedAt = new Date(startedMs).toISOString();
+    const failed: UpstreamRead = { body: null, fetchedAt };
+    const entry = { expiresAtMs: startedMs + options.ttlSeconds * 1000, settled: false, read: Promise.resolve(failed) };
+    entry.read = (async (): Promise<UpstreamRead> => {
+      try {
+        const response = await fetchImpl(url, {
+          headers: options.headers,
+          signal: AbortSignal.timeout(options.timeoutMs),
+          cache: 'no-store',
+        });
+        if (response.ok) {
+          const body: unknown = options.parse === 'text' ? await response.text() : await response.json();
+          if (body !== null && body !== undefined) {
+            const good: UpstreamRead = { body, fetchedAt };
+            lastGood.set(url, { atMs: startedMs, read: good });
+            return good;
+          }
+        }
+      } catch {
+        // timeout, network error or an unparseable body: handled as a failed read below
+      }
+      entry.expiresAtMs = Math.min(entry.expiresAtMs, now() + FAILED_READ_TTL_MS);
+      return standIn(url, options) ?? failed;
+    })();
+    void entry.read.then(() => {
+      entry.settled = true;
+    });
+    memo.set(url, entry);
+    return forCaller(url, options, entry);
+  };
+}
+
+const readUpstream = createUpstreamReader();
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function bmkgGempa(json: unknown): unknown {
+  return asRecord(asRecord(json)?.Infogempa)?.gempa;
+}
+
+/**
+ * Shapes an untyped record (upstream JSON, or a quake a client echoes back) as a BMKG
+ * report: every field the dashboard reads as text is made text, so a number where a
+ * string is expected cannot throw further down.
+ */
+export function toBMKGDetail(gempa: Record<string, unknown>): BMKGGempaDetail {
+  const text = (value: unknown): string =>
+    typeof value === 'string' ? value : value === null || value === undefined ? '' : String(value);
+  return {
+    Tanggal: text(gempa.Tanggal),
+    Jam: text(gempa.Jam),
+    DateTime: text(gempa.DateTime),
+    Coordinates: text(gempa.Coordinates),
+    Lintang: text(gempa.Lintang),
+    Bujur: text(gempa.Bujur),
+    Magnitude: text(gempa.Magnitude),
+    Kedalaman: text(gempa.Kedalaman),
+    Wilayah: text(gempa.Wilayah),
+    Potensi: text(gempa.Potensi),
+    ...(gempa.Dirasakan === undefined || gempa.Dirasakan === null ? {} : { Dirasakan: text(gempa.Dirasakan) }),
+    ...(gempa.Shakemap === undefined || gempa.Shakemap === null ? {} : { Shakemap: text(gempa.Shakemap) }),
+    ...(gempa.seeded === true ? { seeded: true } : {}),
+  };
+}
+
+/** BMKG's latest report (autogempa.json), or null when it lacks a usable time or magnitude. */
+export function parseBMKGLatest(json: unknown): BMKGGempaDetail | null {
+  const gempa = asRecord(bmkgGempa(json));
+  if (!gempa) return null;
+  const magnitude = parseFloat(String(gempa.Magnitude ?? ''));
+  if (toDate(String(gempa.DateTime ?? '')) === null || !Number.isFinite(magnitude) || magnitude <= 0) return null;
+  const detail = toBMKGDetail(gempa);
+  // BMKG's feed never marks a record as a placeholder; that flag is the dashboard's own.
+  delete detail.seeded;
+  return detail;
+}
+
+/**
+ * BMKG's felt-earthquake list (gempadirasakan.json): the same fields as the latest report,
+ * with "Dirasakan". An entry without a usable time or magnitude is skipped.
+ */
+export function parseBMKGFelt(json: unknown): BMKGGempaDetail[] {
+  const list = bmkgGempa(json);
+  if (!Array.isArray(list)) return [];
+  const reports: BMKGGempaDetail[] = [];
+  for (const item of list) {
+    const gempa = asRecord(item);
+    if (!gempa) continue;
+    const magnitude = parseFloat(String(gempa.Magnitude ?? ''));
+    if (toDate(String(gempa.DateTime ?? '')) === null || !Number.isFinite(magnitude) || magnitude <= 0) continue;
+    const report = toBMKGDetail(gempa);
+    delete report.seeded;
+    reports.push(report);
+  }
+  return reports;
+}
+
+/**
+ * BMKG's M ≥ 5 list (gempaterkini.json). An entry without a parseable time, magnitude or
+ * position is skipped: stamping it "now" or assuming a magnitude would invent an earthquake.
+ */
+export function parseBMKGRecent(json: unknown): SeismicEvent[] {
+  const list = bmkgGempa(json);
+  if (!Array.isArray(list)) return [];
+
+  const events: SeismicEvent[] = [];
+  for (const item of list) {
+    const gempa = asRecord(item);
+    if (!gempa) continue;
+    const coords = parseBMKGCoords(String(gempa.Coordinates ?? ''));
+    const magnitude = parseFloat(String(gempa.Magnitude ?? ''));
+    const dateTime = String(gempa.DateTime ?? '');
+    if (!coords || !Number.isFinite(magnitude) || magnitude <= 0 || toDate(dateTime) === null) continue;
+
+    const event = buildSeismicEvent({
+      magnitude,
+      depth: parseBMKGDepth(String(gempa.Kedalaman ?? '')),
+      latitude: coords.lat,
+      longitude: coords.lon,
+      faultZone: String(gempa.Wilayah ?? ''),
+      timestamp: dateTime,
+    });
+    const potensi = typeof gempa.Potensi === 'string' ? gempa.Potensi.trim() : '';
+    events.push(potensi ? { ...event, potensi } : event);
+  }
+  return events;
+}
+
+/** USGS regional catalogue (GeoJSON); the same skip rule as the BMKG list applies. */
+export function parseUSGSRecent(json: unknown): SeismicEvent[] {
+  const features = asRecord(json)?.features;
+  if (!Array.isArray(features)) return [];
+
+  const events: SeismicEvent[] = [];
+  for (const item of features) {
+    const feature = asRecord(item);
+    const properties = asRecord(feature?.properties);
+    const coords = asRecord(feature?.geometry)?.coordinates;
+    if (!properties || !Array.isArray(coords)) continue;
+    const [longitude, latitude, depth] = coords.map(Number);
+    const magnitude = typeof properties.mag === 'number' ? properties.mag : NaN;
+    const time = typeof properties.time === 'number' ? toDate(properties.time) : null;
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || !(magnitude > 0) || !time) continue;
+
+    events.push(
+      buildSeismicEvent({
+        magnitude,
+        depth,
+        latitude,
+        longitude,
+        faultZone: typeof properties.place === 'string' ? properties.place : '',
+        timestamp: time.toISOString(),
+      })
+    );
+  }
+  return events;
+}
+
+/**
+ * Stand-in for the latest report while autogempa is unreachable, built from the newest
+ * entry of BMKG's list. Marked `seeded` because it is not BMKG's latest report, and it
+ * carries no Potensi: the list entry keeps BMKG's own text in `potensi`.
+ */
+function latestFromRecent(recent: SeismicEvent[]): BMKGGempaDetail {
+  const newest = recent.reduce((a, b) => ((toMillis(b.timestamp) ?? 0) > (toMillis(a.timestamp) ?? 0) ? b : a));
+  return {
+    Tanggal: formatWibDate(newest.timestamp),
+    Jam: formatWibTime(newest.timestamp),
+    DateTime: newest.timestamp,
+    Coordinates: `${newest.latitude},${newest.longitude}`,
+    Lintang: `${Math.abs(newest.latitude).toFixed(2)} ${newest.latitude < 0 ? 'LS' : 'LU'}`,
+    Bujur: `${Math.abs(newest.longitude).toFixed(2)} ${newest.longitude < 0 ? 'BB' : 'BT'}`,
+    Magnitude: newest.magnitude.toFixed(1),
+    Kedalaman: `${newest.depth.toFixed(0)} km`,
+    Wilayah: newest.fault_zone,
+    Potensi: '',
+    seeded: true,
+  };
+}
+
+/** Assembles the quake payload and records what each sub-feed delivered. */
+type QuakeFeedId = 'bmkg_latest' | 'bmkg_recent' | 'bmkg_felt' | 'usgs';
+
+export function buildEarthquakesPayload(feeds: {
+  latest: BMKGGempaDetail | null;
+  recentBMKG: SeismicEvent[];
+  recentUSGS: SeismicEvent[];
+  /** BMKG's felt-earthquake list; omitted by callers that do not read it. */
+  feltBMKG?: BMKGGempaDetail[];
+  /** When the payload was assembled. */
+  fetchedAt: string;
+  /** When each sub-feed was really read, where that differs from `fetchedAt` (memoised reads). */
+  fetchedAtByFeed?: Partial<Record<QuakeFeedId, string>>;
+}): RealtimeEarthquakesData {
+  const { latest, recentBMKG, recentUSGS, feltBMKG, fetchedAt, fetchedAtByFeed } = feeds;
+  const outcome = (feed: QuakeFeedId, state: FeedState): FeedProvenance => ({
+    state,
+    fetched_at: fetchedAtByFeed?.[feed] ?? fetchedAt,
+  });
+
+  // The placeholder set is only ever served whole. Topping up a partly live payload with
+  // it would put invented quakes on the same map as real ones, so a feed that failed
+  // alongside a working one contributes nothing instead.
+  if (!latest && recentBMKG.length === 0 && recentUSGS.length === 0) {
+    return {
+      ...FALLBACK_EARTHQUAKES,
+      timestamp: fetchedAt,
+      provenance: {
+        bmkg_latest: outcome('bmkg_latest', 'seed'),
+        bmkg_recent: outcome('bmkg_recent', 'seed'),
+        usgs: outcome('usgs', 'seed'),
+      },
+    };
+  }
+
+  const standIn = !latest && recentBMKG.length > 0 ? latestFromRecent(recentBMKG) : null;
+  return {
+    latest_bmkg: latest ?? standIn,
+    recent_bmkg: recentBMKG,
+    recent_usgs: recentUSGS,
+    ...(feltBMKG ? { felt_bmkg: feltBMKG } : {}),
+    timestamp: fetchedAt,
+    provenance: {
+      bmkg_latest: outcome('bmkg_latest', latest ? 'live' : standIn ? 'seed' : 'failed'),
+      bmkg_recent: outcome('bmkg_recent', recentBMKG.length > 0 ? 'live' : 'failed'),
+      ...(feltBMKG ? { bmkg_felt: outcome('bmkg_felt', feltBMKG.length > 0 ? 'live' : 'failed') } : {}),
+      usgs: outcome('usgs', recentUSGS.length > 0 ? 'live' : 'failed'),
+    },
+  };
 }
 
 export async function fetchRealtimeEarthquakesData(): Promise<RealtimeEarthquakesData> {
-  try {
-    const [bmkgAutoRes, bmkgRecentRes, usgsRes] = await Promise.allSettled([
-      fetchRevalidated('https://data.bmkg.go.id/DataMKG/TEWS/autogempa.json', 4000, 30),
-      fetchRevalidated('https://data.bmkg.go.id/DataMKG/TEWS/gempaterkini.json', 4000, 30),
-      fetchRevalidated(
-        'https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&minlatitude=-11&maxlatitude=6&minlongitude=95&maxlongitude=141&limit=12&orderby=time',
-        4000,
-        45
-      ),
-    ]);
+  const [latest, recent, felt, usgs] = await Promise.all([
+    readUpstream('https://data.bmkg.go.id/DataMKG/TEWS/autogempa.json', { timeoutMs: 4000, ttlSeconds: 30, parse: 'json' }),
+    readUpstream('https://data.bmkg.go.id/DataMKG/TEWS/gempaterkini.json', { timeoutMs: 4000, ttlSeconds: 30, parse: 'json' }),
+    readUpstream('https://data.bmkg.go.id/DataMKG/TEWS/gempadirasakan.json', { timeoutMs: 4000, ttlSeconds: 30, parse: 'json' }),
+    readUpstream(
+      'https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&minlatitude=-11&maxlatitude=6&minlongitude=95&maxlongitude=141&limit=12&orderby=time',
+      { timeoutMs: 4000, ttlSeconds: 45, parse: 'json' }
+    ),
+  ]);
 
-    let latestBMKG: BMKGGempaDetail | null = null;
-    const recentBMKG: SeismicEvent[] = [];
-    const recentUSGS: SeismicEvent[] = [];
-
-    if (bmkgAutoRes.status === 'fulfilled' && bmkgAutoRes.value.ok) {
-      try {
-        const json = await bmkgAutoRes.value.json();
-        if (json?.Infogempa?.gempa) {
-          latestBMKG = json.Infogempa.gempa as BMKGGempaDetail;
-        }
-      } catch {
-        // ignore parse error
-      }
-    }
-
-    if (bmkgRecentRes.status === 'fulfilled' && bmkgRecentRes.value.ok) {
-      try {
-        const json = await bmkgRecentRes.value.json();
-        const gempaList: BMKGGempaDetail[] = json?.Infogempa?.gempa || [];
-        for (const g of gempaList) {
-          const coords = parseBMKGCoords(g.Coordinates);
-          if (!coords) continue;
-          recentBMKG.push(
-            buildSeismicEvent({
-              magnitude: parseFloat(g.Magnitude) || 5.0,
-              depth: parseBMKGDepth(g.Kedalaman),
-              latitude: coords.lat,
-              longitude: coords.lon,
-              faultZone: g.Wilayah,
-              timestamp: g.DateTime,
-            })
-          );
-        }
-      } catch {
-        // ignore parse error
-      }
-    }
-
-    if (usgsRes.status === 'fulfilled' && usgsRes.value.ok) {
-      try {
-        const json = await usgsRes.value.json();
-        const features = json?.features || [];
-        for (const f of features) {
-          const coords = f?.geometry?.coordinates;
-          if (!Array.isArray(coords) || coords.length < 2) continue;
-          recentUSGS.push(
-            buildSeismicEvent({
-              magnitude: f?.properties?.mag ?? 4.5,
-              depth: coords[2] ?? 10,
-              latitude: coords[1],
-              longitude: coords[0],
-              faultZone: f?.properties?.place || 'Indonesia Region',
-              timestamp: f?.properties?.time ? new Date(f.properties.time).toISOString() : undefined,
-            })
-          );
-        }
-      } catch {
-        // ignore parse error
-      }
-    }
-
-    if (!latestBMKG && recentBMKG.length > 0) {
-      const first = recentBMKG[0];
-      latestBMKG = {
-        Tanggal: new Date(first.timestamp).toLocaleDateString('id-ID'),
-        Jam: new Date(first.timestamp).toLocaleTimeString('id-ID'),
-        DateTime: first.timestamp,
-        Coordinates: `${first.latitude},${first.longitude}`,
-        Lintang: `${Math.abs(first.latitude).toFixed(2)} ${first.latitude < 0 ? 'LS' : 'LU'}`,
-        Bujur: `${Math.abs(first.longitude).toFixed(2)} ${first.longitude < 0 ? 'BB' : 'BT'}`,
-        Magnitude: first.magnitude.toFixed(1),
-        Kedalaman: `${first.depth.toFixed(0)} km`,
-        Wilayah: first.fault_zone,
-        Potensi: 'Tidak berpotensi tsunami',
-      };
-    }
-
-    if (latestBMKG || recentBMKG.length > 0 || recentUSGS.length > 0) {
-      return {
-        latest_bmkg: latestBMKG || FALLBACK_EARTHQUAKES.latest_bmkg,
-        recent_bmkg: recentBMKG.length > 0 ? recentBMKG : FALLBACK_EARTHQUAKES.recent_bmkg,
-        recent_usgs: recentUSGS.length > 0 ? recentUSGS : FALLBACK_EARTHQUAKES.recent_usgs,
-        timestamp: new Date().toISOString(),
-      };
-    }
-  } catch {
-    // fall back cleanly below
-  }
-
-  return {
-    ...FALLBACK_EARTHQUAKES,
-    timestamp: new Date().toISOString(),
-  };
+  return buildEarthquakesPayload({
+    latest: parseBMKGLatest(latest.body),
+    recentBMKG: parseBMKGRecent(recent.body),
+    recentUSGS: parseUSGSRecent(usgs.body),
+    feltBMKG: parseBMKGFelt(felt.body),
+    fetchedAt: new Date().toISOString(),
+    fetchedAtByFeed: {
+      bmkg_latest: latest.fetchedAt,
+      bmkg_recent: recent.fetchedAt,
+      bmkg_felt: felt.fetchedAt,
+      usgs: usgs.fetchedAt,
+    },
+  });
 }
 
+/** Hazard radii and closures are PVMBG's to state; MAGMA's eruption page carries none, so readers are pointed there. */
+const PVMBG_RECOMMENDATION = 'Ikuti rekomendasi resmi PVMBG di MAGMA Indonesia (magma.esdm.go.id).';
+
+/**
+ * MAGMA's eruption page does not state the activity level, so a report carries the level
+ * of the built-in volcano catalogue — the same table every other surface quotes, tagged
+ * "katalog" there. It is not a live PVMBG status.
+ */
 function getVolcanoAlertLevel(name: string): string {
-  const n = name.toLowerCase();
-  if (n.includes('lewotobi')) return 'LEVEL IV (AWAS)';
-  if (n.includes('ibu') || n.includes('krakatau') || n.includes('semeru') || n.includes('merapi') || n.includes('marapi')) {
-    return 'LEVEL III (SIAGA)';
-  }
-  return 'LEVEL II (WASPADA)';
+  return findVolcanoLocation(name)?.defaultLevel ?? 'Tidak tercantum di katalog';
 }
 
-function getVolcanoRecommendation(level: string): string {
-  if (level.includes('AWAS')) {
-    return 'Zona bahaya radius 7 km dari kawah harus dikosongkan total. Waspadai awan panas guguran dan lahar hujan.';
-  }
-  if (level.includes('SIAGA')) {
-    return 'Masyarakat dan wisatawan dilarang beraktivitas dalam radius 3 - 5 km dari kawah aktif. Gunakan pelindung pernapasan bila hujan abu.';
-  }
-  return 'Masyarakat diimbau tidak mendekati kawah dalam radius 2 km dan mengikuti arahan Pos PGA PVMBG setempat.';
-}
+/**
+ * Opens every built-in volcano record. These stand in while MAGMA is unreachable so the
+ * volcano surfaces have something to open; they describe no observation and name no author.
+ */
+const SEEDED_VOLCANO_NOTE = 'Data cadangan bawaan — MAGMA Indonesia tidak terjangkau. Bukan laporan PVMBG untuk';
 
 export function fallbackVolcanoEruptions(now = new Date()): VolcanoEruption[] {
-  const dateLabel = now.toLocaleDateString('id-ID', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    timeZone: 'Asia/Jakarta',
-  });
+  const dateLabel = formatWibDate(now);
   const iso = now.toISOString();
 
   return [
     {
       id: 'volcano-ibu-fallback',
       volcano_name: 'Ibu',
-      time: 'Monitoring Aktif',
+      time: 'Data cadangan',
       date: dateLabel,
-      description: 'Aktivitas vulkanik G. Ibu terpantau pada stasiun PGA PVMBG dengan embusan kolom abu kelabu berkala.',
+      description: `${SEEDED_VOLCANO_NOTE} G. Ibu.`,
       amplitude: '28 mm',
       duration: '44 detik',
-      visual_ash: 'Kolom abu kelabu tebal terpantau di puncak',
-      author: 'Pos PGA Ibu / PVMBG',
+      visual_ash: 'Tidak tersedia (data cadangan)',
+      author: 'Tidak ada (data cadangan)',
       alert_level: 'LEVEL III (SIAGA)',
-      recommendation: 'Masyarakat dilarang beraktivitas dalam radius 4 km dari kawah aktif.',
+      recommendation: PVMBG_RECOMMENDATION,
       timestamp: iso,
+      source: 'SEEDED',
     },
     {
       id: 'volcano-krakatau-fallback',
       volcano_name: 'Anak Krakatau',
-      time: 'Monitoring Aktif',
+      time: 'Data cadangan',
       date: dateLabel,
-      description: 'Stasiun seismik Pasauran & Kalianda memantau tremor vulkanik Anak Krakatau di kawasan Selat Sunda.',
+      description: `${SEEDED_VOLCANO_NOTE} G. Anak Krakatau.`,
       amplitude: '24 mm',
       duration: '36 detik',
-      visual_ash: 'Asap kawah putih hingga kelabu intensitas sedang',
-      author: 'Pos PGA Pasauran / PVMBG',
+      visual_ash: 'Tidak tersedia (data cadangan)',
+      author: 'Tidak ada (data cadangan)',
       alert_level: 'LEVEL III (SIAGA)',
-      recommendation: 'Nelayan dan kapal wisata dilarang mendekati radius 5 km dari kawah aktif.',
+      recommendation: PVMBG_RECOMMENDATION,
       timestamp: iso,
+      source: 'SEEDED',
     },
     {
       id: 'volcano-semeru-fallback',
       volcano_name: 'Semeru',
-      time: 'Monitoring Aktif',
+      time: 'Data cadangan',
       date: dateLabel,
-      description: 'Erupsi periodik G. Semeru dengan lontaran abu mengarah ke sektor tenggara Besuk Kobokan.',
+      description: `${SEEDED_VOLCANO_NOTE} G. Semeru.`,
       amplitude: '22 mm',
       duration: '110 detik',
-      visual_ash: 'Asap putih kelabu condong ke tenggara',
-      author: 'Pos PGA Sawur / PVMBG',
+      visual_ash: 'Tidak tersedia (data cadangan)',
+      author: 'Tidak ada (data cadangan)',
       alert_level: 'LEVEL III (SIAGA)',
-      recommendation: 'Hindari aktivitas di sepanjang Besuk Kobokan hingga 13 km dari puncak.',
+      recommendation: PVMBG_RECOMMENDATION,
       timestamp: iso,
+      source: 'SEEDED',
     },
   ];
 }
 
-export function parseMagmaVolcanoHTML(html: string, now = new Date()): VolcanoEruption[] {
+const MAGMA_MONTHS = [
+  'januari', 'februari', 'maret', 'april', 'mei', 'juni',
+  'juli', 'agustus', 'september', 'oktober', 'november', 'desember',
+];
+
+/** Hours ahead of UTC for the three zones MAGMA writes report times in. */
+const MAGMA_ZONE_OFFSET: Record<string, number> = { WIB: 7, WITA: 8, WIT: 9 };
+
+const HTML_ENTITIES: Record<string, string> = {
+  '&plusmn;': '±',
+  '&nbsp;': ' ',
+  '&amp;': '&',
+  '&deg;': '°',
+  '&quot;': '"',
+  '&#039;': "'",
+  '&lt;': '<',
+  '&gt;': '>',
+};
+
+/** The handful of entities MAGMA's report text uses; anything else is left as written. */
+function decodeHtmlText(text: string): string {
+  return text.replace(/&(?:plusmn|nbsp|amp|deg|quot|#039|lt|gt);/g, (entity) => HTML_ENTITIES[entity] ?? entity);
+}
+
+interface CalendarDay {
+  year: number;
+  /** 1–12 */
+  month: number;
+  day: number;
+}
+
+/** "Hari Ini, Senin, 23 November 2026" or "Minggu, 22 November 2026, 1 hari yang lalu" → that calendar day. */
+function parseMagmaDay(text: string): CalendarDay | null {
+  const match = text.match(/(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/);
+  if (!match) return null;
+  const month = MAGMA_MONTHS.indexOf(match[2].toLowerCase());
+  const day = Number(match[1]);
+  if (month < 0 || day < 1 || day > 31) return null;
+  return { year: Number(match[3]), month: month + 1, day };
+}
+
+/**
+ * The day header inside a chunk of the timeline: `undefined` when there is none, `null`
+ * when there is one that cannot be read (the items after it then have no known date).
+ */
+function lastMagmaDayHeader(chunk: string): CalendarDay | null | undefined {
+  const headers = [...chunk.matchAll(/<p class="timeline-date">([^<]*)<\/p>/gi)];
+  if (headers.length === 0) return undefined;
+  return parseMagmaDay(headers[headers.length - 1][1]);
+}
+
+/** "18:24 WIT" on a calendar day → the instant, in the zone MAGMA wrote (WIB when it names none). */
+function magmaInstant(day: CalendarDay, timeText: string): Date | null {
+  const match = timeText.match(/(\d{1,2})[:.](\d{2})\s*(WITA|WIB|WIT)?/i);
+  if (!match) return null;
+  const offset = MAGMA_ZONE_OFFSET[(match[3] ?? 'WIB').toUpperCase()];
+  const instant = new Date(Date.UTC(day.year, day.month - 1, day.day, Number(match[1]) - offset, Number(match[2])));
+  return Number.isNaN(instant.getTime()) ? null : instant;
+}
+
+/**
+ * Reads MAGMA's eruption timeline. The page groups reports under day headers, and each
+ * report is dated from its own header (or, failing that, from the date in its text) —
+ * never from the time the page was fetched, which would present last week's eruption as
+ * today's. A report whose date cannot be read says so and carries no timestamp.
+ */
+export function parseMagmaVolcanoHTML(html: string): VolcanoEruption[] {
   const chunks = html.split('<div class="timeline-item">');
   if (chunks.length <= 1) return [];
 
-  const dateLabel = now.toLocaleDateString('id-ID', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    timeZone: 'Asia/Jakarta',
-  });
-  const iso = now.toISOString();
   const list: VolcanoEruption[] = [];
+  // The header before the first report sits ahead of the first split point.
+  let headerDay = lastMagmaDayHeader(chunks[0]) ?? null;
 
   for (let i = 1; i < chunks.length && list.length < 12; i++) {
     const chunk = chunks[i];
+    const reportDay = headerDay;
+    // A header at the tail of this chunk opens the next day's group.
+    const nextHeader = lastMagmaDayHeader(chunk);
+    if (nextHeader !== undefined) headerDay = nextHeader;
+
     const titleMatch = chunk.match(/<p class="timeline-title"><a[^>]*>([^<]+)<\/a><\/p>/i);
     if (!titleMatch) continue;
 
@@ -425,26 +763,33 @@ export function parseMagmaVolcanoHTML(html: string, now = new Date()): VolcanoEr
     const authorMatch = chunk.match(/<p class="timeline-author">Dibuat oleh <a[^>]*>([^<]+)<\/a><\/p>/i);
     const textMatch = chunk.match(/<p class="timeline-text">([\s\S]*?)<\/p>/i);
     const imgMatch = chunk.match(/src="(https:\/\/magma\.vsi\.esdm\.go\.id\/img\/crs\/[^"]+)"/i);
-    const detailMatch = chunk.match(/href="(https:\/\/magma\.esdm\.go\.id\/v1\/gunung-api\/informasi-letusan\/[^"]+\/show)"/i);
+    const detailMatch = chunk.match(/href="(https:\/\/magma\.esdm\.go\.id\/v1\/gunung-api\/informasi-letusan\/([^"/]+)\/show)"/i);
 
     const desc = textMatch
-      ? textMatch[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+      ? decodeHtmlText(textMatch[1].replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim()
       : 'Laporan visual letusan MAGMA ESDM.';
     const ampMatch = desc.match(/amplitudo maksimum\s*([0-9]+(?:\.[0-9]+)?\s*mm)/i);
     const durMatch = desc.match(/durasi\s*([0-9]+(?:\.[0-9]+)?\s*detik)/i);
     const lowerDesc = desc.toLowerCase();
+    // Only what the report's own wording supports; no cause is supplied on its behalf.
     const visualAsh = lowerDesc.includes('kolom abu teramati')
-      ? 'Kolom abu vulkanik teramati di atas puncak'
-      : lowerDesc.includes('kelabu')
-      ? 'Asap/abu kelabu terpantau pos PGA'
-      : 'Visual letusan tidak teramati (tertutup kabut / malam)';
+      ? 'Kolom abu teramati di atas puncak'
+      : lowerDesc.includes('tidak teramati')
+      ? 'Visual letusan tidak teramati'
+      : 'Tidak dirangkum — baca teks laporan';
 
-    const alertLevel = getVolcanoAlertLevel(volcanoName);
+    const time = timeMatch ? timeMatch[1].trim() : '';
+    const day = reportDay ?? parseMagmaDay(desc);
+    const instant = day ? magmaInstant(day, time) : null;
+    const slug = volcanoName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
     list.push({
-      id: `erup-${volcanoName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${i}`,
+      // MAGMA's own report id keeps a record's identity stable as newer reports push it down the page.
+      id: `erup-${slug}-${detailMatch ? detailMatch[2] : i}`,
       volcano_name: volcanoName,
-      time: timeMatch ? timeMatch[1].trim() : 'Live',
-      date: dateLabel,
+      time: time || 'Waktu tidak tersedia',
+      // The calendar day as MAGMA wrote it, in the report's own zone (05:00 UTC is midday in WIB).
+      date: day ? formatWibDate(Date.UTC(day.year, day.month - 1, day.day, 5)) : 'Tanggal tidak tersedia',
       description: desc,
       amplitude: ampMatch ? ampMatch[1] : '—',
       duration: durMatch ? durMatch[1] : '—',
@@ -452,38 +797,98 @@ export function parseMagmaVolcanoHTML(html: string, now = new Date()): VolcanoEr
       image_url: imgMatch ? imgMatch[1] : undefined,
       detail_url: detailMatch ? detailMatch[1] : undefined,
       author: authorMatch ? authorMatch[1].trim() : 'Petugas Pos PVMBG',
-      alert_level: alertLevel,
-      recommendation: getVolcanoRecommendation(alertLevel),
-      timestamp: iso,
+      alert_level: getVolcanoAlertLevel(volcanoName),
+      recommendation: PVMBG_RECOMMENDATION,
+      timestamp: instant ? instant.toISOString() : '',
+      source: 'PVMBG_LIVE',
     });
   }
 
   return list;
 }
 
-export async function fetchRealtimeVolcanoesData(): Promise<VolcanoEruption[]> {
-  try {
-    const res = await fetchRevalidated(
-      'https://magma.esdm.go.id/v1/gunung-api/informasi-letusan',
-      4500,
-      120,
-      {
-        'User-Agent': 'Mozilla/5.0 (compatible; INATEWS-Sentinel/1.0)',
-        Accept: 'text/html,application/xhtml+xml',
-      }
-    );
-    if (res.ok) {
-      const html = await res.text();
-      const parsed = parseMagmaVolcanoHTML(html);
-      if (parsed.length > 0) {
-        return parsed;
-      }
-    }
-  } catch {
-    // fallback below
-  }
+const MAGMA_PAGE_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (compatible; INATEWS-Sentinel/1.0)',
+  Accept: 'text/html,application/xhtml+xml',
+};
 
+export async function fetchRealtimeVolcanoesData(): Promise<VolcanoEruption[]> {
+  const page = await readUpstream('https://magma.esdm.go.id/v1/gunung-api/informasi-letusan', {
+    timeoutMs: 4500,
+    ttlSeconds: 120,
+    parse: 'text',
+    headers: MAGMA_PAGE_HEADERS,
+  });
+  if (typeof page.body === 'string') {
+    const parsed = parseMagmaVolcanoHTML(page.body);
+    if (parsed.length > 0) return parsed;
+  }
   return fallbackVolcanoEruptions();
+}
+
+/**
+ * MAGMA's media pages embed every image as base64, so they are large (the seismogram page
+ * is several megabytes) and slow. They are read in the background, kept for five minutes,
+ * and the last good copy stands in for an hour if MAGMA stops answering.
+ */
+const MAGMA_MEDIA_READ = {
+  waitMs: 4000,
+  ttlSeconds: 300,
+  staleIfErrorSeconds: 60 * 60,
+  parse: 'text' as const,
+  headers: MAGMA_PAGE_HEADERS,
+};
+
+const parsedMediaPages = new Map<string, { fetchedAt: string; cards: MagmaMediaCard[] }>();
+
+/** The cards of a media page, parsed once per read. Null when the page gave nothing usable. */
+function mediaCards(page: 'seismogram' | 'cctv', read: UpstreamRead): MagmaMediaCard[] | null {
+  if (typeof read.body !== 'string') return null;
+  let parsed = parsedMediaPages.get(page);
+  if (!parsed || parsed.fetchedAt !== read.fetchedAt) {
+    parsed = { fetchedAt: read.fetchedAt, cards: parseMagmaMediaCards(read.body) };
+    parsedMediaPages.set(page, parsed);
+  }
+  // A page without a single card has changed shape; that is a failed read, not "unlisted".
+  return parsed.cards.length > 0 ? parsed.cards : null;
+}
+
+function mediaState(read: UpstreamRead, cards: MagmaMediaCard[] | null, found: boolean): VolcanoMediaState {
+  if (found) return 'available';
+  if (cards) return 'unlisted';
+  return read.pending ? 'loading' : 'failed';
+}
+
+/** PVMBG's live seismogram and camera frames for one catalogue volcano, as MAGMA publishes them. */
+export async function fetchVolcanoMedia(catalogueName: string): Promise<VolcanoMediaResponse> {
+  const [seismogramPage, cameraPage] = await Promise.all([
+    readUpstream('https://magma.esdm.go.id/v1/gunung-api/live-seismogram', { ...MAGMA_MEDIA_READ, timeoutMs: 45_000 }),
+    readUpstream('https://magma.esdm.go.id/v1/gunung-api/cctv', { ...MAGMA_MEDIA_READ, timeoutMs: 20_000 }),
+  ]);
+  const seismogramCards = mediaCards('seismogram', seismogramPage);
+  const cameraCards = mediaCards('cctv', cameraPage);
+  const seismogram = seismogramCards ? findSeismogramCard(seismogramCards, catalogueName) : null;
+  const cameras = cameraCards ? findCameraCards(cameraCards, catalogueName) : [];
+
+  return {
+    volcano: catalogueName,
+    seismogram: seismogram
+      ? {
+          label: mediaCardLabel(seismogram),
+          station: seismogram.detail,
+          image: seismogram.image,
+          fetched_at: seismogramPage.fetchedAt,
+        }
+      : null,
+    seismogram_state: mediaState(seismogramPage, seismogramCards, seismogram !== null),
+    cameras: cameras.map((card) => ({
+      label: mediaCardLabel(card),
+      camera: card.detail,
+      image: card.image,
+      fetched_at: cameraPage.fetchedAt,
+    })),
+    cameras_state: mediaState(cameraPage, cameraCards, cameras.length > 0),
+  };
 }
 
 function deriveKeywordsForStation(name: string, code: string): string[] {
@@ -526,7 +931,8 @@ export function parseIOCStations(
     const rawLoc = String(rec.Location ?? rec.location ?? '').trim();
     const name = seed?.name || (rawLoc ? `${rawLoc}, Indonesia` : `Stasiun ${code.toUpperCase()}`);
     const sensor = String(rec.sensor ?? rec.Sensor ?? '').trim() || seed?.type || 'Tide Gauge';
-    const lastUpdated = rec.lasttime || rec.LastTime ? String(rec.lasttime ?? rec.LastTime) : undefined;
+    // IOC writes "2026-11-16 01:00:00" in UTC with no zone designator; toDate reads it that way.
+    const lastUpdated = toDate(String(rec.lasttime ?? rec.LastTime ?? ''))?.toISOString();
 
     seen.add(code);
     parsed.push({
@@ -543,6 +949,7 @@ export function parseIOCStations(
       isAnomaly: false,
       lastUpdated,
       source: 'IOC_LIVE',
+      levelSource: validLevel ? 'IOC_LASTVALUE' : 'BUILT_IN',
       keywords: seed?.keywords || deriveKeywordsForStation(name, code),
     });
   }
@@ -554,7 +961,9 @@ export function applyTsunamiToStations(
   stations: IOCStationReading[],
   tsunami: TsunamiScenario | null
 ): IOCStationReading[] {
-  if (!tsunami?.active) {
+  // A statement without a height (the live BMKG case) paints nothing: only a positive
+  // drill height may move a gauge.
+  if (!tsunami?.active || !(tsunami.wave_anomaly > 0)) {
     return stations.map((st) => ({
       ...st,
       level: `${st.baseLevelMeters.toFixed(2)}m`,
@@ -566,7 +975,7 @@ export function applyTsunamiToStations(
   }
 
   const contextText = `${tsunami.affected_zones.join(' ')} ${tsunami.sensor_id}`.toLowerCase();
-  const baseWave = Math.max(0.6, tsunami.wave_anomaly || 1.5);
+  const baseWave = Math.max(0.6, tsunami.wave_anomaly);
 
   return stations.map((st, idx) => {
     const keywordMatch = st.keywords.some((kw) => contextText.includes(kw));
@@ -594,40 +1003,42 @@ export function applyTsunamiToStations(
   });
 }
 
-export async function fetchRealtimeOceanData(): Promise<OceanFeedResponse> {
-  const nowIso = new Date().toISOString();
-  try {
-    const res = await fetchRevalidated(
-      'http://www.ioc-sealevelmonitoring.org/service.php?format=json&query=stationlist',
-      4500,
-      60
-    );
-    if (res.ok) {
-      const json = await res.json();
-      const parsed = parseIOCStations(json);
-      if (parsed.length > 0) {
-        return {
-          stations: parsed,
-          count: parsed.length,
-          live_count: parsed.length,
-          anomaly_count: 0,
-          source: 'IOC_LIVE',
-          timestamp: nowIso,
-        };
-      }
-    }
-  } catch {
-    // fall back to seeded array below
-  }
-
+function seededOceanFeed(nowIso: string): OceanFeedResponse {
   return {
     stations: SEEDED_IOC_STATIONS,
     count: SEEDED_IOC_STATIONS.length,
     live_count: 0,
     anomaly_count: 0,
     source: 'FALLBACK',
+    level_kind: 'reference',
     timestamp: nowIso,
   };
+}
+
+export async function fetchRealtimeOceanData(): Promise<OceanFeedResponse> {
+  // IOC's station list is a large document that can take ten seconds to arrive and changes
+  // rarely. No route waits that long for it: a slow read finishes in the background, is
+  // kept for ten minutes, and the list it brought stands in for hours if IOC stops answering.
+  const list = await readUpstream('http://www.ioc-sealevelmonitoring.org/service.php?format=json&query=stationlist', {
+    timeoutMs: 25_000,
+    waitMs: 4500,
+    ttlSeconds: 600,
+    staleIfErrorSeconds: 6 * 60 * 60,
+    parse: 'json',
+  });
+  const parsed = parseIOCStations(list.body);
+  if (parsed.length > 0) {
+    return {
+      stations: parsed,
+      count: parsed.length,
+      live_count: parsed.length,
+      anomaly_count: 0,
+      source: 'IOC_LIVE',
+      level_kind: 'reference',
+      timestamp: list.fetchedAt,
+    };
+  }
+  return seededOceanFeed(list.fetchedAt);
 }
 
 const WEATHER_PROBE_POINTS = [
@@ -635,58 +1046,10 @@ const WEATHER_PROBE_POINTS = [
   { name: 'Selatan Jawa', lat: -7.72, lon: 109.01 },
 ];
 
-export async function fetchOpenMeteoWeatherSummary(): Promise<WeatherSummary> {
-  const nowIso = new Date().toISOString();
-  try {
-    const results = await Promise.allSettled(
-      WEATHER_PROBE_POINTS.map((p) =>
-        fetchRevalidated(
-          `https://api.open-meteo.com/v1/forecast?latitude=${p.lat}&longitude=${p.lon}&current_weather=true`,
-          3500,
-          120
-        )
-      )
-    );
-
-    const winds: number[] = [];
-    const temps: number[] = [];
-
-    for (const r of results) {
-      if (r.status === 'fulfilled' && r.value.ok) {
-        try {
-          const data = await r.value.json();
-          const cw = data?.current_weather;
-          if (cw && typeof cw.windspeed === 'number' && typeof cw.temperature === 'number') {
-            winds.push(cw.windspeed);
-            temps.push(cw.temperature);
-          }
-        } catch {
-          // ignore
-        }
-      }
-    }
-
-    if (winds.length > 0 && temps.length > 0) {
-      const avgWind = winds.reduce((a, b) => a + b, 0) / winds.length;
-      const maxWind = Math.max(...winds);
-      const avgTemp = temps.reduce((a, b) => a + b, 0) / temps.length;
-      const conditionTag = maxWind >= 35 ? 'ANGIN KENCANG' : 'TERPANTAU NOMINAL';
-      return {
-        statusLabel: `${avgWind.toFixed(0)} km/h • ${avgTemp.toFixed(1)}°C (${conditionTag})`,
-        avgWindKmh: Number(avgWind.toFixed(1)),
-        maxWindKmh: Number(maxWind.toFixed(1)),
-        avgTempC: Number(avgTemp.toFixed(1)),
-        stationName: 'Selat Sunda & Selatan Jawa',
-        source: 'OPEN_METEO',
-        timestamp: nowIso,
-      };
-    }
-  } catch {
-    // fallback below
-  }
-
+/** Placeholder returned when Open-Meteo gave nothing; `source: 'FALLBACK'` marks its numbers as such. */
+function unavailableWeather(nowIso: string): WeatherSummary {
   return {
-    statusLabel: 'OPEN-METEO ONLINE',
+    statusLabel: 'Open-Meteo: tidak tersedia',
     avgWindKmh: 16,
     maxWindKmh: 20,
     avgTempC: 28.5,
@@ -694,6 +1057,98 @@ export async function fetchOpenMeteoWeatherSummary(): Promise<WeatherSummary> {
     source: 'FALLBACK',
     timestamp: nowIso,
   };
+}
+
+export async function fetchOpenMeteoWeatherSummary(): Promise<WeatherSummary> {
+  const reads = await Promise.all(
+    WEATHER_PROBE_POINTS.map((p) =>
+      readUpstream(
+        `https://api.open-meteo.com/v1/forecast?latitude=${p.lat}&longitude=${p.lon}&current_weather=true`,
+        { timeoutMs: 3500, ttlSeconds: 120, parse: 'json' }
+      )
+    )
+  );
+
+  const winds: number[] = [];
+  const temps: number[] = [];
+  const usedAt: string[] = [];
+
+  for (const read of reads) {
+    const current = asRecord(asRecord(read.body)?.current_weather);
+    if (current && typeof current.windspeed === 'number' && typeof current.temperature === 'number') {
+      winds.push(current.windspeed);
+      temps.push(current.temperature);
+      usedAt.push(read.fetchedAt);
+    }
+  }
+
+  if (winds.length > 0) {
+    const avgWind = winds.reduce((a, b) => a + b, 0) / winds.length;
+    const maxWind = Math.max(...winds);
+    const avgTemp = temps.reduce((a, b) => a + b, 0) / temps.length;
+    return {
+      statusLabel: `${avgWind.toFixed(0)} km/jam • ${avgTemp.toFixed(1)}°C${maxWind >= 35 ? ' (ANGIN KENCANG)' : ''}`,
+      avgWindKmh: Number(avgWind.toFixed(1)),
+      maxWindKmh: Number(maxWind.toFixed(1)),
+      avgTempC: Number(avgTemp.toFixed(1)),
+      stationName: 'Selat Sunda & Selatan Jawa',
+      source: 'OPEN_METEO',
+      // The older of the readings behind the averages.
+      timestamp: usedAt.sort()[0],
+    };
+  }
+
+  return unavailableWeather(reads[0]?.fetchedAt ?? new Date().toISOString());
+}
+
+/**
+ * Health of the BMKG quake feed as the attention level needs it: the worse of the two
+ * sub-feeds, because a routine reading needs both the latest report and the M ≥ 5 list.
+ */
+function bmkgFeedHealth(earthquakes: RealtimeEarthquakesData): QuakeFeedHealth {
+  const reported = [earthquakes.provenance?.bmkg_latest?.state, earthquakes.provenance?.bmkg_recent?.state];
+  if (reported.includes('failed')) return 'failed';
+  if (reported.includes('seed')) return 'seed';
+  if (reported.includes('live')) return 'live';
+  // No provenance (Go-backend shape, older callers). A payload holding no real BMKG
+  // record still cannot be read as routine.
+  if (collectQuakeFacts(earthquakes.latest_bmkg, earthquakes.recent_bmkg ?? []).length > 0) return 'unreported';
+  return earthquakes.latest_bmkg?.seeded ? 'seed' : 'failed';
+}
+
+/** In-window BMKG events that would each raise the attention level on their own. */
+function countRaisingEvents(latest: BMKGGempaDetail | null, recent: SeismicEvent[], now: Date): number {
+  const raises = (l: BMKGGempaDetail | null, r: SeismicEvent[]) =>
+    assessAttention({ latest: l, recent: r, feed: 'live', now }).level !== 'rutin';
+  const latestFacts = collectQuakeFacts(latest, []).length;
+  let count = raises(latest, []) ? 1 : 0;
+  for (const event of recent) {
+    // An entry that adds no fact is a placeholder, undated, or the latest report's own list entry.
+    const addsFact = collectQuakeFacts(latest, [event]).length > latestFacts;
+    if (addsFact && raises(null, [event])) count += 1;
+  }
+  return count;
+}
+
+/**
+ * The 0–100 activity index, kept in the payload for parity with the Go backend. It is
+ * banded by the level so the two can never disagree, and placed inside its band by the
+ * magnitude of the event that sets the level (the largest in-window event for RUTIN):
+ * each band is [floor, span, magnitude at the floor, magnitude at the ceiling].
+ * An unknown level has no index and reads 0.
+ */
+const INDEX_BANDS = {
+  rutin: [10, 29, 3, 5],
+  meningkat: [40, 29, 5, 6],
+  tinggi: [70, 19, 6, 8],
+  tsunami: [90, 8, 6.5, 9],
+} as const;
+
+function activityPercentage(band: keyof typeof INDEX_BANDS | 'unknown', magnitude: number): number {
+  if (band === 'unknown') return 0;
+  const [floor, span, from, to] = INDEX_BANDS[band];
+  const position = Number.isFinite(magnitude) ? Math.min(1, Math.max(0, (magnitude - from) / (to - from))) : 0;
+  return Number((floor + span * position).toFixed(1));
 }
 
 export function computeDynamicIntensityAndStatus(params: {
@@ -706,78 +1161,75 @@ export function computeDynamicIntensityAndStatus(params: {
   status: SystemStatus;
   tsunami: TsunamiScenario | null;
 } {
-  const nowIso = (params.now || new Date()).toISOString();
-  const latestMag = parseFloat(params.earthquakes.latest_bmkg?.Magnitude || '0') || 0;
-  const combined = [...(params.earthquakes.recent_bmkg || []), ...(params.earthquakes.recent_usgs || [])];
-  const mags = combined.map((q) => q.magnitude).filter((m) => Number.isFinite(m) && m > 0);
-  if (latestMag > 0) mags.unshift(latestMag);
+  const now = params.now ?? new Date();
+  const nowIso = now.toISOString();
+  const nowMs = now.getTime();
+  const { earthquakes, ocean, weather } = params;
+  const latest = earthquakes.latest_bmkg;
+  const recent = earthquakes.recent_bmkg ?? [];
 
-  const maxMag = mags.length > 0 ? Math.max(...mags) : 3.8;
-  const avgMag = mags.length > 0 ? mags.reduce((a, b) => a + b, 0) / mags.length : 3.8;
-  const recentStrongCount = mags.filter((m) => m >= 5.0).length;
+  // The level comes from BMKG's own records only. USGS is a comparison catalogue and never drives it.
+  const attention = assessAttention({
+    latest,
+    recent,
+    felt: earthquakes.felt_bmkg ?? [],
+    feed: bmkgFeedHealth(earthquakes),
+    now,
+  });
+  // BMKG's statement outlives the latest report (an aftershock replaces it within minutes),
+  // so the M ≥ 5 list is read too; past the hold period it is no longer treated as in force.
+  const statementQuake = findTsunamiStatement(latest, recent, nowMs);
+  const riskLevel = statementQuake ? 'CRITICAL' : attentionToRiskLevel(attention.level);
+  const riskReasons = statementQuake
+    ? [`Pernyataan BMKG: ${statementQuake.Potensi.trim()}`, ...attention.reasons]
+    : attention.reasons;
 
-  const potensi = (params.earthquakes.latest_bmkg?.Potensi || '').toLowerCase();
-  const isTsunamiWarning = potensi.includes('berpotensi tsunami') && !potensi.includes('tidak');
+  // Same window as the attention level, so the numbers below describe the facts behind it.
+  const windowed = collectQuakeFacts(latest, recent).filter(
+    (fact) => nowMs - fact.timeMs <= ATTENTION_WINDOW_MS && fact.timeMs <= nowMs + 60_000
+  );
+  const magnitudes = windowed.map((fact) => fact.magnitude);
+  const maxMag = magnitudes.length > 0 ? Math.max(...magnitudes) : 0;
+  const avgMag = magnitudes.length > 0 ? magnitudes.reduce((a, b) => a + b, 0) / magnitudes.length : 0;
 
-  // Derive realistic intensity percentage (12% quiet baseline up to 96% for major M7+ / tsunami)
-  const rawPct =
-    14 +
-    Math.max(0, maxMag - 3.5) * 14 +
-    Math.min(18, recentStrongCount * 2.5) +
-    (isTsunamiWarning ? 28 : 0);
-  const overallPercentage = Number(Math.min(98, Math.max(12, rawPct)).toFixed(1));
-
-  const riskLevel =
-    isTsunamiWarning || maxMag >= 7.0
-      ? 'CRITICAL'
-      : maxMag >= 6.0 || overallPercentage >= 70
-      ? 'HIGH'
-      : maxMag >= 5.0 || overallPercentage >= 45
-      ? 'ELEVATED'
-      : 'NORMAL';
+  const overallPercentage = statementQuake
+    ? activityPercentage('tsunami', parseFloat(statementQuake.Magnitude))
+    : activityPercentage(attention.level, attention.driver?.magnitude ?? maxMag);
 
   const trendDirection =
-    isTsunamiWarning
-      ? 'TSUNAMI ALERT'
-      : maxMag >= 6.0
-      ? 'ELEVATED CLUSTER'
-      : params.earthquakes.recent_bmkg.length > 0
-      ? 'BMKG LIVE TELEMETRY'
-      : 'STABLE';
+    attention.level === 'unknown' ? 'DATA BMKG TIDAK TERSEDIA' : `M≥5: ${attention.counts.last24h} dalam 24 jam`;
 
-  const activeAlerts = (isTsunamiWarning ? 3 : 0) + (maxMag >= 6.0 ? 2 : maxMag >= 5.5 ? 1 : 0);
+  const oceanStatus = statementQuake
+    ? 'BMKG: BERPOTENSI TSUNAMI'
+    : ocean.source === 'IOC_LIVE' && ocean.live_count > 0
+    ? `IOC: ${ocean.live_count} stasiun terdaftar`
+    : 'IOC: tidak tersedia';
 
-  const oceanStatus = isTsunamiWarning
-    ? 'TSUNAMI WARNING ACTIVE'
-    : params.ocean.live_count > 0
-    ? `IOC LIVE (${params.ocean.live_count} STASIUN)`
-    : 'IOC STANDBY ARRAY';
-
-  const tsunami: TsunamiScenario | null = isTsunamiWarning
+  // Only what BMKG's public feed states. Heights, arrival times and warning zones exist
+  // solely in its bulletins, so none are estimated here; the times are the earthquake's
+  // own, which keeps the record identical from one poll to the next.
+  const tsunami: TsunamiScenario | null = statementQuake
     ? {
         active: true,
-        detection_time: params.earthquakes.latest_bmkg?.DateTime || nowIso,
-        sensor_id: `IOC UNESCO (${params.ocean.count} Pasut) & BMKG TEWS`,
-        wave_anomaly: Number(Math.max(1.5, (maxMag - 6.0) * 1.8).toFixed(2)),
-        affected_zones: [params.earthquakes.latest_bmkg?.Wilayah || 'Pesisir Dekat Episenter'],
-        response_actions: [
-          'Aktifkan peringatan dini tsunami BMKG & sirine pesisir terdekat',
-          'Evakuasi segera menjauhi pantai dan muara sungai menuju ketinggian >20m',
-          'Pantau pembacaan langsung tide gauge IOC UNESCO & DART Buoy',
-        ],
+        detection_time: statementQuake.DateTime,
+        sensor_id: 'BMKG — pernyataan potensi tsunami',
+        wave_anomaly: 0,
+        affected_zones: statementQuake.Wilayah ? [statementQuake.Wilayah] : [],
+        response_actions: ['Rujuk buletin Peringatan Dini Tsunami BMKG untuk status dan estimasi tiba per wilayah.'],
         severity: 'CRITICAL',
-        timestamp: nowIso,
+        timestamp: statementQuake.DateTime,
       }
     : null;
 
   const activityIndex: ActivityIndex = {
     overall_percentage: overallPercentage,
-    seismic_change: Number((Math.max(1.2, (maxMag - 3.0) * 4.8)).toFixed(1)),
-    tremor_change: Number((Math.max(0.8, recentStrongCount * 1.4)).toFixed(1)),
-    deformation_trend: maxMag >= 6.0 ? 'ELEVATED STRAIN RELEASE' : 'REALTIME_MONITORED',
-    thermal_trend: 'MONITORED (MAGMA/PVMBG)',
+    // No feed measures change rates, deformation or thermal output, so none is reported.
+    seismic_change: 0,
+    tremor_change: 0,
+    deformation_trend: 'tidak tersedia',
+    thermal_trend: 'tidak tersedia',
     trend_direction: trendDirection,
-    earthquake_count: combined.length + (params.earthquakes.latest_bmkg ? 1 : 0),
+    earthquake_count: windowed.length,
     avg_magnitude: Number(avgMag.toFixed(1)),
     max_magnitude: Number(maxMag.toFixed(1)),
     timestamp: nowIso,
@@ -786,51 +1238,32 @@ export function computeDynamicIntensityAndStatus(params: {
   const status: SystemStatus = {
     seismic_intensity: overallPercentage,
     ocean_status: oceanStatus,
-    weather_status: params.weather.statusLabel,
-    infra_status: riskLevel === 'CRITICAL' ? 'SIAGA DARURAT PESISIR' : 'OPERASIONAL',
-    active_alerts: activeAlerts,
+    weather_status: weather.statusLabel,
+    infra_status: 'tidak tersedia',
+    active_alerts: countRaisingEvents(latest, recent, now) + (statementQuake ? 1 : 0),
     risk_level: riskLevel,
     trend_direction: trendDirection,
     last_update: nowIso,
     tsunami_scenario: tsunami ?? undefined,
+    risk_reasons: riskReasons,
+    provenance: {
+      ...earthquakes.provenance,
+      ioc: { state: ocean.source === 'IOC_LIVE' ? 'live' : 'seed', fetched_at: ocean.timestamp },
+      open_meteo: { state: weather.source === 'OPEN_METEO' ? 'live' : 'seed', fetched_at: weather.timestamp },
+    },
   };
 
   return { activityIndex, status, tsunami };
 }
 
 export async function fetchLiveTelemetrySnapshot(): Promise<LiveTelemetrySnapshot> {
-  const [quakesRes, volcanoesRes, oceanRes, weatherRes] = await Promise.allSettled([
+  // None of the four fetchers rejects: each resolves to live data or its own marked fallback.
+  const [earthquakes, volcanoes, ocean, weather] = await Promise.all([
     fetchRealtimeEarthquakesData(),
     fetchRealtimeVolcanoesData(),
     fetchRealtimeOceanData(),
     fetchOpenMeteoWeatherSummary(),
   ]);
-
-  const earthquakes = quakesRes.status === 'fulfilled' ? quakesRes.value : FALLBACK_EARTHQUAKES;
-  const volcanoes = volcanoesRes.status === 'fulfilled' ? volcanoesRes.value : fallbackVolcanoEruptions();
-  const ocean =
-    oceanRes.status === 'fulfilled'
-      ? oceanRes.value
-      : {
-          stations: SEEDED_IOC_STATIONS,
-          count: SEEDED_IOC_STATIONS.length,
-          live_count: 0,
-          anomaly_count: 0,
-          source: 'FALLBACK' as const,
-          timestamp: new Date().toISOString(),
-        };
-  const weather =
-    weatherRes.status === 'fulfilled'
-      ? weatherRes.value
-      : {
-          statusLabel: 'OPEN-METEO ONLINE',
-          avgWindKmh: 16,
-          maxWindKmh: 20,
-          avgTempC: 28.5,
-          stationName: 'Zona Subduksi Indonesia',
-          source: 'FALLBACK' as const,
-          timestamp: new Date().toISOString(),
-        };
 
   const { activityIndex, status, tsunami } = computeDynamicIntensityAndStatus({
     earthquakes,
@@ -855,43 +1288,47 @@ export function buildLiveAgentState(params: {
   activeModel: string;
   now?: Date;
 }): AgentState {
-  const now = params.now || new Date();
+  const now = params.now ?? new Date();
   const nowIso = now.toISOString();
   const { earthquakes, ocean, weather, volcanoes, activityIndex, status } = params.snapshot;
-  const latest = earthquakes.latest_bmkg;
-  const magLabel = latest?.Magnitude ? `M${latest.Magnitude}` : `M${activityIndex.max_magnitude.toFixed(1)}`;
-  const regionLabel = latest?.Wilayah || 'Zona Subduksi Indonesia';
-  const severity = status.risk_level === 'CRITICAL' ? 'CRITICAL' : status.risk_level === 'HIGH' ? 'HIGH' : 'NORMAL';
+  const latest = earthquakes.latest_bmkg && !earthquakes.latest_bmkg.seeded ? earthquakes.latest_bmkg : null;
+  const quakeLabel = latest
+    ? `M${latest.Magnitude} (${latest.Kedalaman}) di ${latest.Wilayah}`
+    : 'tidak tersedia';
+  const stationLabel = ocean.source === 'IOC_LIVE' ? `${ocean.live_count} stasiun` : 'tidak tersedia';
+  const eruptionReports = volcanoes.filter((volcano) => volcano.source !== 'SEEDED').length;
+  const statement = findTsunamiStatement(earthquakes.latest_bmkg, earthquakes.recent_bmkg, now.getTime());
+  const severity = status.risk_level;
   const baseCycle = Math.max(24, Math.floor(now.getTime() / 15000) % 900);
 
   const recentThoughts: AgentThought[] = [
     {
       cycle_id: baseCycle - 3,
       phase: 'OBSERVE',
-      message: `Menyerap gempa terkini BMKG ${magLabel} (${latest?.Kedalaman || '10 km'}) di ${regionLabel} serta ${ocean.live_count > 0 ? ocean.live_count : ocean.count} stasiun pasut IOC UNESCO.`,
+      message: `Gempa terkini BMKG: ${quakeLabel}. Daftar stasiun pasut IOC: ${stationLabel}.`,
       severity,
       timestamp: new Date(now.getTime() - 45000).toISOString(),
     },
     {
       cycle_id: baseCycle - 2,
       phase: 'ORIENT',
-      message: `Mengorelasikan ${activityIndex.earthquake_count} event seismik BMKG+USGS (maks M${activityIndex.max_magnitude.toFixed(1)}), cuaca maritim ${weather.statusLabel}, dan ${volcanoes.length} laporan vulkanik PVMBG.`,
+      message: `${status.risk_reasons?.[0] ?? 'Dasar tingkat pantauan tidak tersedia'}. Laporan erupsi PVMBG: ${eruptionReports}. Cuaca: ${weather.statusLabel}.`,
       severity,
       timestamp: new Date(now.getTime() - 30000).toISOString(),
     },
     {
       cycle_id: baseCycle - 1,
       phase: 'DECIDE',
-      message: status.tsunami_scenario?.active
-        ? `Ambang bahaya tsunami terlewati (${magLabel}). Mengeluarkan rekomendasi aktivasi peringatan pesisir segera.`
-        : `Indeks intensitas seismik terhitung ${activityIndex.overall_percentage.toFixed(1)}% (${status.risk_level}). Belum ada indikasi tsunami destruktif dari jaringan IOC UNESCO.`,
+      message: statement
+        ? `BMKG menyatakan potensi tsunami untuk gempa M${statement.Magnitude} (${statement.Wilayah || 'lokasi tidak tersedia'}). Rujuk buletin Peringatan Dini Tsunami BMKG; dasbor tidak memperkirakan tinggi maupun waktu tiba.`
+        : `Tingkat pantauan (tidak resmi): ${TONE_LABEL[toTone(status.risk_level)]}. Status tsunami hanya bersumber dari pernyataan BMKG.`,
       severity,
       timestamp: new Date(now.getTime() - 15000).toISOString(),
     },
     {
       cycle_id: baseCycle,
       phase: 'ACT',
-      message: `Menyelaraskan status pemantauan kontinyu ke dasbor BMKG/BNPB dan memperbarui memori konteks Copilot (${params.activeModel}).`,
+      message: `Memperbarui ringkasan dasbor (${params.activeModel}).`,
       severity,
       timestamp: nowIso,
     },
@@ -900,20 +1337,22 @@ export function buildLiveAgentState(params: {
   const recentActions: AgentTacticalAction[] = [
     {
       id: `act-bmkg-${baseCycle}`,
-      type: status.tsunami_scenario?.active ? 'TSUNAMI_ALERT_DISPATCH' : 'STATION_VERIFICATION',
-      agency: 'BMKG InaTEWS',
-      target_zone: regionLabel,
-      priority: severity === 'CRITICAL' ? 'CRITICAL' : activityIndex.max_magnitude >= 5.0 ? 'ELEVATED' : 'NORMAL',
-      rationale: `Evaluasi real-time parameter ${magLabel} kedalaman ${latest?.Kedalaman || '10 km'} (${latest?.Potensi || 'terpantau'}).`,
+      type: 'BMKG_FEED_READ',
+      agency: 'BMKG',
+      target_zone: latest?.Wilayah || 'tidak tersedia',
+      priority: severity,
+      rationale: latest
+        ? `Membaca gempa terkini ${quakeLabel}. Keterangan BMKG: ${latest.Potensi?.trim() || 'tidak tersedia'}.`
+        : 'Data gempa terkini BMKG tidak tersedia.',
       timestamp: nowIso,
     },
     {
       id: `act-ioc-${baseCycle}`,
-      type: 'TIDE_GAUGE_POLL',
+      type: 'IOC_STATION_LIST_READ',
       agency: 'IOC UNESCO',
-      target_zone: ocean.live_count > 0 ? `${ocean.live_count} Stasiun Pasut Live Indonesia` : 'Jaringan Pasut Pesisir Indonesia',
-      priority: status.tsunami_scenario?.active ? 'CRITICAL' : 'NORMAL',
-      rationale: `Pemantauan elevasi muka air laut (${status.ocean_status}) dan kondisi angin permukaan ${weather.avgWindKmh} km/h.`,
+      target_zone: `Daftar stasiun pasut Indonesia: ${stationLabel}`,
+      priority: 'NORMAL',
+      rationale: 'Hanya daftar stasiun yang dibaca; dasbor tidak mengambil data muka laut langsung dan tidak menghitung anomali.',
       timestamp: new Date(now.getTime() - 30000).toISOString(),
     },
   ];

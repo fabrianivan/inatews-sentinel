@@ -294,11 +294,6 @@ html {
   --tone-ink: var(--tone-kritis-ink);
 }
 
-/* A drill adds its control strip under the masthead, so the HUD starts lower */
-[data-mode="simulasi"] {
-  --hud-top: 132px;
-}
-
 /* ==========================================================================
    Component classes — in the components layer so Tailwind utilities on the
    same element (bg-*, border-*, rounded-*) win, as authors expect.
@@ -585,58 +580,6 @@ html {
     color: var(--accent);
   }
 
-  /* Lightbox backdrop */
-  .volcano-lightbox {
-    position: fixed;
-    inset: 0;
-    background: rgba(2, 6, 23, 0.82);
-    backdrop-filter: blur(10px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 16px;
-    z-index: 3000;
-  }
-
-  /* Modal & seismogram inspection helpers */
-  .volcano-card__level-badge {
-    display: inline-flex;
-    align-items: center;
-    border-radius: 6px;
-    font-family: var(--font-mono);
-    font-weight: 700;
-    border: 1px solid var(--border-hairline);
-  }
-
-  .volcano-card__level-badge--awas {
-    background: var(--tone-kritis-bg);
-    color: var(--tone-kritis);
-    border-color: var(--tone-kritis-border);
-  }
-
-  .volcano-card__level-badge--siaga {
-    background: var(--tone-tinggi-bg);
-    color: var(--tone-tinggi);
-    border-color: var(--tone-tinggi-border);
-  }
-
-  .volcano-card__level-badge--waspada {
-    background: var(--tone-meningkat-bg);
-    color: var(--tone-meningkat);
-    border-color: var(--tone-meningkat-border);
-  }
-
-  .volcano-lightbox__close-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border-radius: 8px;
-    border: 1px solid var(--border-hairline);
-    background: var(--surface-2);
-    color: var(--text-primary);
-    font-weight: 600;
-    cursor: pointer;
-  }
 }
 
 /* ==========================================================================
@@ -755,9 +698,100 @@ html {
   font-family: var(--font-sans) !important;
 }
 
-/* Keep Leaflet's own controls clear of the floating masthead (and drill strip) */
+/* Leaflet's own controls start below the floating masthead (and drill strip) and below the
+   row of pills at the map's left edge, so an opened basemap list is never under a pill.
+   The page writes the measured values on <html>; these are the defaults before it has. */
+:root {
+  --map-controls-top: calc(var(--hud-top) + 44px);
+}
+
 .leaflet-top {
-  top: var(--hud-top) !important;
+  top: var(--map-controls-top) !important;
+}
+
+/* On a phone an open popup is nearly as wide as the map, so it would sit under Leaflet's
+   own controls (they stack above every map pane). They step aside until it closes. */
+@media (max-width: 1023.98px) {
+  .leaflet-container:has(.leaflet-popup) .leaflet-top.leaflet-left {
+    visibility: hidden;
+  }
+}
+
+/* The attribution sits in the map's bottom-right corner, and "Reset peta" (with the cursor
+   read-out) in the same corner just above it — beside or below every panel, never moved
+   about by one: the desktop inspector and the tablet side panel end above it. */
+#tactical-map-section [data-map-control="reset"] {
+  right: 12px;
+  bottom: 24px;
+}
+
+#tactical-map-section .leaflet-control-attribution {
+  margin: 0;
+  border-top-left-radius: 6px;
+  background: var(--hud-solid);
+  color: var(--text-muted);
+}
+
+#tactical-map-section .leaflet-control-attribution a {
+  color: var(--text-secondary);
+}
+
+@media (min-width: 1024px) {
+  #tactical-map-section [data-map-control="reset"] {
+    right: 16px;
+  }
+}
+
+/* From `sm` to `lg` the panel dock runs along the bottom-left: "Lapisan peta" sits above it. */
+@media (min-width: 640px) and (max-width: 1023.98px) {
+  #tactical-map-section [data-map-control="layers"] {
+    bottom: 72px;
+    max-height: calc(100% - var(--map-controls-top) - 216px);
+  }
+
+  [data-map-sheet] [data-map-control="layers"] {
+    max-width: calc(100% - 420px);
+  }
+}
+
+/* On a phone the dock spans the whole bottom edge: the attribution sits just above it, and
+   "Lapisan peta" and "Reset peta" above that. */
+@media (max-width: 639.98px) {
+  #tactical-map-section .leaflet-bottom {
+    bottom: 66px;
+  }
+
+  #tactical-map-section [data-map-control="layers"],
+  #tactical-map-section [data-map-control="reset"] {
+    bottom: 90px;
+  }
+
+  #tactical-map-section [data-map-control="layers"] {
+    max-height: calc(100% - var(--map-controls-top) - 234px);
+  }
+}
+
+/* On a phone the sheet covers the lower map, where the zoom buttons, "Reset peta" and
+   "Lapisan peta" would end up under it; they step aside while it is open (pinch zoom still
+   works). */
+@media (max-width: 639.98px) {
+  [data-map-sheet] .leaflet-top.leaflet-left,
+  [data-map-sheet] [data-map-control] {
+    visibility: hidden;
+  }
+}
+
+/* At national zoom the volcano badges would pile onto each other (always the case on a
+   phone): they shrink to a toned dot, and the level numeral returns on zooming in. */
+.leaflet-container[data-zoom-tier="far"] .volcano-map-marker > div {
+  width: 18px !important;
+  height: 18px !important;
+  margin: 3px 0 0 11px;
+  border-radius: 9999px !important;
+}
+
+.leaflet-container[data-zoom-tier="far"] .volcano-map-marker > div > span:not([data-declutter]) {
+  display: none;
 }
 
 .leaflet-left {
@@ -813,12 +847,6 @@ html {
 ::-webkit-scrollbar-thumb {
   background: var(--border-strong);
   border-radius: 9999px;
-}
-
-@media (max-width: 900px) {
-  .seismogram-modal__body {
-    grid-template-columns: 1fr !important;
-  }
 }
 
 /* ==========================================================================

@@ -4,14 +4,15 @@ import { proxyBackendJson } from '@/lib/backendProxy';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
-  let body: { mode?: string } = { mode: 'real' };
+  let body: { mode?: unknown } = {};
   try {
-    body = await req.json();
+    const parsed: unknown = await req.json();
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) body = parsed;
   } catch {
-    // ignore
+    // malformed JSON: treated as an empty body
   }
 
-  const mode = body.mode || 'real';
+  const mode = body.mode === 'drill' ? 'drill' : 'real';
   const proxied = await proxyBackendJson<{ status: string; mode: string }>('/api/mode', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   formatAge,
+  formatClockStamp,
   formatCountdown,
   formatDecimal,
   formatDuration,
@@ -110,6 +111,15 @@ test('row stamps carry an age within a day and a date beyond it', () => {
   assert.equal(formatRowStamp('2026-11-16T07:05:00Z', now), '3 jam lalu · 14:05 WIB');
   assert.equal(formatRowStamp('2026-11-04T07:05:00Z', now), '04 Nov · 14:05 WIB');
   assert.equal(formatRowStamp('nope', now), '—');
+});
+
+test('clock stamps stay short for today and gain a date beyond a day', () => {
+  const now = '2026-11-16T10:21:30Z';
+  assert.equal(formatClockStamp('2026-11-16T07:05:00Z', now), '14:05 WIB');
+  assert.equal(formatClockStamp('2026-11-04T07:05:00Z', now), '04 Nov · 14:05 WIB');
+  // Without a reference time (before mount) only the clock is shown.
+  assert.equal(formatClockStamp('2026-11-04T07:05:00Z', null), '14:05 WIB');
+  assert.equal(formatClockStamp('nope', now), '—');
 });
 
 test('display numbers use the Indonesian decimal comma', () => {

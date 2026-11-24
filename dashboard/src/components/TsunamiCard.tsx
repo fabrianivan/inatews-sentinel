@@ -28,13 +28,17 @@ import {
   type Tone,
   type TsunamiWarningLevel,
 } from '@/lib/severity';
+import type { QuakeFeedHealth } from '@/lib/attention';
 import { isNoticeInForce, type TsunamiNotice } from '@/lib/tsunamiNotice';
 import { formatDecimal, formatWibTime, toMillis } from '@/lib/time';
 import type { TsunamiScenario } from '@/lib/types';
 
 const BMKG_TSUNAMI_URL = 'https://www.bmkg.go.id/gempabumi/berpotensi-tsunami';
 
-/** BMKG's standing guidance: at the coast, the shaking itself is the warning. */
+/**
+ * BMKG's standing public guidance: at the coast, the shaking itself is the warning. It is
+ * shown under BMKG's name — the dashboard gives no evacuation advice of its own.
+ */
 const NATURAL_WARNING =
   'Guncangan kuat atau lama di pantai: segera evakuasi mandiri ke tempat tinggi, jangan menunggu peringatan.';
 
@@ -83,7 +87,7 @@ function CardFrame({
       >
         <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
         {/* Only the static headline is an alert; clocks beside it must not be re-announced */}
-        <p role="alert" className="t-status min-w-0 flex-1 truncate">
+        <p role="alert" className="t-status min-w-0 flex-1 leading-tight">
           {title}
         </p>
         {collapsed && collapsedDetail ? (
@@ -112,6 +116,7 @@ function CardFrame({
 function NaturalWarning() {
   return (
     <p className="t-body rounded-xl border border-[var(--border-strong)] bg-[var(--surface-subtle)] px-3 py-2 font-semibold">
+      <span className="t-micro mb-0.5 block font-normal">Panduan umum BMKG</span>
       {NATURAL_WARNING}
     </p>
   );
@@ -142,6 +147,8 @@ function OfficialLevelLegend({ caption }: { caption: string }) {
 
 interface BmkgCardProps {
   notice: TsunamiNotice;
+  /** State of the BMKG feed: while it is down, the card says when the statement was last seen. */
+  feedState?: QuakeFeedHealth;
   collapsed: boolean;
   onToggleCollapsed: () => void;
   /** Operator records that BMKG has ended the warning. */
@@ -156,10 +163,15 @@ const NOTICE_TITLE: Record<TsunamiNotice['status'], string> = {
   expired: 'Pernyataan tsunami lebih dari 6 jam lalu',
 };
 
-function noticeSubline(notice: TsunamiNotice): string | null {
+function noticeSubline(notice: TsunamiNotice, feedState: QuakeFeedHealth | undefined): string | null {
+  const lastSeen = formatWibTime(notice.lastSeenMs, { seconds: false });
+  // The feed being down says nothing about the warning; the last observation is what is known.
+  if (isNoticeInForce(notice) && (feedState === 'failed' || feedState === 'seed' || feedState === 'stale')) {
+    return `Umpan BMKG sedang tidak terjangkau. Pernyataan terakhir terlihat ${lastSeen} — status terkini hanya ada di BMKG.`;
+  }
   switch (notice.status) {
     case 'unconfirmed':
-      return `Pernyataan terakhir terlihat ${formatWibTime(notice.lastSeenMs, { seconds: false })}. Umpan publik sudah berganti ke gempa lain — status terkini hanya ada di BMKG.`;
+      return `Pernyataan terakhir terlihat ${lastSeen}. Umpan publik sudah berganti ke gempa lain — status terkini hanya ada di BMKG.`;
     case 'ended':
       return 'Teks penghentian peringatan terlihat pada umpan BMKG. Verifikasi di laman BMKG.';
     case 'acknowledged':
@@ -171,12 +183,12 @@ function noticeSubline(notice: TsunamiNotice): string | null {
   }
 }
 
-export function BmkgTsunamiCard({ notice, collapsed, onToggleCollapsed, onAcknowledge }: BmkgCardProps) {
+export function BmkgTsunamiCard({ notice, feedState, collapsed, onToggleCollapsed, onAcknowledge }: BmkgCardProps) {
   const [confirming, setConfirming] = useState(false);
   const inForce = isNoticeInForce(notice);
   const { quake } = notice;
   const magnitude = parseFloat(quake.Magnitude);
-  const subline = noticeSubline(notice);
+  const subline = noticeSubline(notice, feedState);
   const origin = toMillis(quake.DateTime);
 
   return (
@@ -191,7 +203,8 @@ export function BmkgTsunamiCard({ notice, collapsed, onToggleCollapsed, onAcknow
     >
       {subline && <p className="t-body text-[var(--text-secondary)]">{subline}</p>}
 
-      {origin !== null && (
+      {/* The running clock belongs to a statement in force; afterwards the event is history */}
+      {inForce && origin !== null && (
         <div>
           <EventElapsed since={origin} className="t-hero block text-[2rem] text-[var(--text-primary)]" />
           <p className="t-meta mt-1">sejak gempa</p>
@@ -300,14 +313,21 @@ export function DrillTsunamiCard({ scenario, phase, phaseEnteredAtMs, collapsed,
   const upcoming = nextArrival(arrivals);
   const topLevel = tsunamiLevelFromHeight(scenario.tsunamiHeight) ?? 'waspada';
   const lead = warningLeadMin(scenario);
+  // A warning level exists only once a bulletin carries it: between the mainshock and PD-1
+  // the threat is in force but nothing has been issued, so no level is shown.
+  const bulletinIssued = phase.bulletin !== null;
 
   return (
     <CardFrame
-      tone={officialTone(topLevel)}
+      tone={bulletinIssued ? officialTone(topLevel) : 'kritis'}
       solid
       isDrill
       icon={OctagonAlert}
-      title={`Simulasi · tsunami — tingkat ${OFFICIAL_LEVEL_LABEL[topLevel]} (latihan)`}
+      title={
+        bulletinIssued
+          ? `Simulasi · tsunami tingkat ${OFFICIAL_LEVEL_LABEL[topLevel]} (latihan)`
+          : 'Simulasi · ancaman tsunami (latihan) — buletin belum terbit'
+      }
       collapsedDetail={upcoming ? formatApproxMinutes(upcoming.remainingMs) : 'terlampaui'}
       collapsed={collapsed}
       onToggleCollapsed={onToggleCollapsed}
@@ -323,7 +343,9 @@ export function DrillTsunamiCard({ scenario, phase, phaseEnteredAtMs, collapsed,
 
       {upcoming ? (
         <div className="flex items-end gap-3">
-          <span className="t-hero text-[var(--text-primary)]">{formatApproxMinutes(upcoming.remainingMs)}</span>
+          <span className="t-hero whitespace-nowrap text-[2.25rem] text-[var(--text-primary)]">
+            {formatApproxMinutes(upcoming.remainingMs)}
+          </span>
           <span className="min-w-0 pb-1">
             <span className="t-heading block truncate">{upcoming.zone.name}</span>
             <span className="t-meta block">estimasi gelombang pertama</span>
@@ -352,13 +374,15 @@ export function DrillTsunamiCard({ scenario, phase, phaseEnteredAtMs, collapsed,
             <tr className="border-b border-[var(--border-hairline)] bg-[var(--surface-subtle)]">
               <th scope="col" className="t-micro px-2.5 py-1.5">Zona</th>
               <th scope="col" className="t-micro px-2 py-1.5">Tiba</th>
-              <th scope="col" className="t-micro px-2 py-1.5">Tinggi</th>
-              <th scope="col" className="t-micro px-2.5 py-1.5">Tingkat</th>
+              {/* Height and level share a column: four columns do not fit a phone or the inspector */}
+              <th scope="col" className="t-micro px-2.5 py-1.5 text-right">
+                {bulletinIssued ? 'Tinggi · tingkat' : 'Tinggi'}
+              </th>
             </tr>
           </thead>
           <tbody>
             {arrivals.map(({ zone, remainingMs, passed }) => {
-              const level = tsunamiLevelFromHeight(zone.heightM);
+              const level = bulletinIssued ? tsunamiLevelFromHeight(zone.heightM) : null;
               return (
                 <tr
                   key={zone.name}
@@ -368,17 +392,19 @@ export function DrillTsunamiCard({ scenario, phase, phaseEnteredAtMs, collapsed,
                     {zone.name}
                   </th>
                   <td className="t-data whitespace-nowrap px-2 py-1.5">{formatApproxMinutes(remainingMs)}</td>
-                  <td className="t-data whitespace-nowrap px-2 py-1.5">{formatDecimal(zone.heightM)} m</td>
                   <td className="px-2.5 py-1.5">
-                    {level && (
-                      <span
-                        data-tone={officialTone(level)}
-                        title={`Saran BMKG untuk tingkat ${OFFICIAL_LEVEL_LABEL[level]}: ${TSUNAMI_LEVEL_ADVICE[level]}`}
-                        className="tone-chip tone-chip--outline"
-                      >
-                        {OFFICIAL_LEVEL_LABEL[level]}
-                      </span>
-                    )}
+                    <span className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
+                      <span className="t-data whitespace-nowrap">{formatDecimal(zone.heightM)} m</span>
+                      {level && (
+                        <span
+                          data-tone={officialTone(level)}
+                          title={`Saran BMKG untuk tingkat ${OFFICIAL_LEVEL_LABEL[level]}: ${TSUNAMI_LEVEL_ADVICE[level]}`}
+                          className="tone-chip tone-chip--outline"
+                        >
+                          {OFFICIAL_LEVEL_LABEL[level]}
+                        </span>
+                      )}
+                    </span>
                   </td>
                 </tr>
               );

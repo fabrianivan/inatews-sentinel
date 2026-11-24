@@ -130,6 +130,19 @@ export function formatRowStamp(input: TimeInput, now: TimeInput): string {
   return `${formatWibDate(date, { year: false })} · ${clock}`;
 }
 
+/**
+ * Clock stamp for a live list where rows are minutes old: "14:05 WIB" within a day,
+ * "04 Nov · 14:05 WIB" beyond it. Short enough to sit beside the row's labels on a phone.
+ */
+export function formatClockStamp(input: TimeInput, now: TimeInput): string {
+  const date = toDate(input);
+  const current = toMillis(now);
+  if (!date) return '—';
+  const clock = `${WIB_TIME_MINUTES.format(date)} WIB`;
+  if (current === null || Math.abs(current - date.getTime()) < DAY) return clock;
+  return `${formatWibDate(date, { year: false })} · ${clock}`;
+}
+
 /** Indonesian decimal comma for display values: 6.1 -> "6,1". */
 export function formatDecimal(value: number, fractionDigits = 1): string {
   if (!Number.isFinite(value)) return '—';

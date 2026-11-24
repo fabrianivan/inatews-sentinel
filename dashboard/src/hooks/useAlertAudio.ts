@@ -4,15 +4,19 @@ import { useCallback, useEffect, useRef } from 'react';
 
 export function useAlertAudio(isMuted: boolean) {
   const ctxRef = useRef<AudioContext | null>(null);
-  const lastPlayedRef = useRef<number>(0);
+  const lastPlayedRef = useRef<{ atMs: number; severity: 'critical' | 'high' }>({ atMs: 0, severity: 'high' });
 
   const playChime = useCallback(
     (severity: 'critical' | 'high' = 'critical') => {
       if (isMuted || typeof window === 'undefined') return;
       const nowMs = Date.now();
-      // Cooldown 4s so rapid state ticks don't overlap chimes
-      if (nowMs - lastPlayedRef.current < 4000) return;
-      lastPlayedRef.current = nowMs;
+      // A 4 s cooldown keeps rapid state changes from stacking chimes — except that a
+      // critical tone always follows a lesser one: a quake and BMKG's tsunami statement
+      // usually arrive in one payload, and the statement's tone must not be the one lost.
+      const last = lastPlayedRef.current;
+      const escalates = severity === 'critical' && last.severity !== 'critical';
+      if (nowMs - last.atMs < 4000 && !escalates) return;
+      lastPlayedRef.current = { atMs: nowMs, severity };
 
       try {
         const AudioCtx =

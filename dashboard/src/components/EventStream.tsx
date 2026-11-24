@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { Pause } from 'lucide-react';
 import { useNow } from '@/hooks/useNow';
 import { TONE_LABEL, toTone, type Tone } from '@/lib/severity';
-import { formatRowStamp, formatWibDate, formatWibTime, toDate } from '@/lib/time';
+import { formatClockStamp, formatWibDate, formatWibTime, toDate } from '@/lib/time';
 import type { LiveEvent } from '@/lib/types';
 
 interface EventStreamProps {
@@ -43,8 +43,8 @@ const EVENT_TYPE_CATEGORY: Record<string, EventCategory> = {
   SATELLITE: 'INFRA',
 };
 
-/** Ages are worded in whole seconds or minutes, so a slow tick is enough. */
-const AGE_REFRESH_MS = 15_000;
+/** The stamp only changes form when a row passes a day old, so a slow tick is enough. */
+const STAMP_REFRESH_MS = 60_000;
 
 function categoryOf(eventType: string): EventCategory | null {
   return EVENT_TYPE_CATEGORY[eventType.toUpperCase()] ?? null;
@@ -86,7 +86,9 @@ function EventRow({ event, now }: { event: LiveEvent; now: number | null }) {
     <li className="flex gap-2.5 py-2.5">
       {drill && <span aria-hidden="true" className="drill-band rounded-full" />}
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {/* Labels wrap inside their own column; the time keeps its place at the top right */}
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           {/* A drill's tone sits inside the simulation chip so it cannot be read, or cropped, on its own. */}
           {drill ? (
             <span className="drill-chip">
@@ -105,15 +107,13 @@ function EventRow({ event, now }: { event: LiveEvent; now: number | null }) {
               sintetis
             </span>
           )}
+          </div>
           <time
             dateTime={occurredAt?.toISOString()}
             title={occurredAt ? `${formatWibDate(occurredAt)}, ${formatWibTime(occurredAt)}` : undefined}
-            className="t-meta ml-auto font-mono tabular-nums text-[var(--text-muted)]"
+            className="t-meta shrink-0 whitespace-nowrap font-mono tabular-nums text-[var(--text-muted)]"
           >
-            {/* The age needs the client clock; until mount only the WIB clock time is shown. */}
-            {now === null
-              ? formatWibTime(event.timestamp, { seconds: false })
-              : formatRowStamp(event.timestamp, now)}
+            {formatClockStamp(event.timestamp, now)}
           </time>
         </div>
         <p className={synthetic ? 't-meta mt-1 text-[var(--text-muted)]' : 't-body mt-1'}>
@@ -126,7 +126,7 @@ function EventRow({ event, now }: { event: LiveEvent; now: number | null }) {
 
 /** Owns the clock tick so the header and filters do not re-render with it. */
 function EventList({ events }: { events: LiveEvent[] }) {
-  const now = useNow(AGE_REFRESH_MS);
+  const now = useNow(STAMP_REFRESH_MS);
   return (
     <ul className="divide-y divide-[var(--border-hairline)]">
       {events.map((event) => (

@@ -20,9 +20,11 @@ export async function POST(req: NextRequest) {
   } = {};
 
   try {
-    body = await req.json();
+    const parsed: unknown = await req.json();
+    // `null` and bare values are valid JSON but not a request body.
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) body = parsed;
   } catch {
-    // ignore
+    // malformed JSON: treated as an empty body
   }
 
   const rawQuestion = String(
@@ -33,22 +35,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'question is required' }, { status: 400 });
   }
 
-  const proxied = await proxyBackendJson<{
-    answer?: string;
-    latency_ms?: number;
-    timestamp?: string;
-  }>(
-    '/api/ai/ask',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: rawQuestion }),
-    },
-    3000
-  );
+  // The backend is sent the question only and answers from live data, so a
+  // drill question is answered here, where the scenario context is known.
+  if (body.context?.mode !== 'SIMULASI') {
+    const proxied = await proxyBackendJson<{
+      answer?: string;
+      latency_ms?: number;
+      timestamp?: string;
+    }>(
+      '/api/ai/ask',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: rawQuestion }),
+      },
+      3000
+    );
 
-  if (proxied?.answer) {
-    return NextResponse.json(proxied);
+    if (proxied?.answer) {
+      return NextResponse.json(proxied);
+    }
   }
 
   const provider = normalizeAIProvider(

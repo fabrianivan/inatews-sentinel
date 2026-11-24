@@ -4,8 +4,9 @@ import { TONE_LABEL, toTone, type Tone } from '@/lib/severity';
 import type { ActivityIndex } from '@/lib/types';
 
 interface MetricCardsProps {
-  oceanStatus: string;
-  weatherStatus: string;
+  /** Empty or null when the feed has no reading: the row then says "tidak tersedia". */
+  oceanStatus: string | null;
+  weatherStatus: string | null;
   /** Only shown in a drill: outside one, no feed reports infrastructure status. */
   infraStatus?: string;
   /** Only its drill deformation text is shown: outside a drill no feed reports deformation. */
@@ -14,6 +15,11 @@ interface MetricCardsProps {
   bare?: boolean;
   /** True while a drill is running: every value is then a scenario value, not a feed reading. */
   isSimulasi?: boolean;
+  /**
+   * True when the statuses come from the Go backend (a payload without provenance): they
+   * are then the backend's own wording, shown as such and never mapped to a tone.
+   */
+  fromBackend?: boolean;
 }
 
 interface MetricRow {
@@ -34,8 +40,17 @@ function enumeratedTone(value: string): Tone | null {
   return tone === 'unknown' ? null : tone;
 }
 
-function MetricValue({ value }: { value: string }) {
-  const tone = enumeratedTone(value);
+/**
+ * Standalone statuses open with the agency they come from ("BMKG: …", "IOC: …"). That
+ * prefix, when present, is the row's source — a BMKG statement must not sit under an IOC tag.
+ */
+function splitSource(value: string, fallback: string | undefined): { source: string | undefined; text: string } {
+  const match = /^(BMKG|IOC|Open-Meteo|PVMBG|USGS):\s*(\S.*)$/i.exec(value);
+  return match ? { source: match[1], text: match[2] } : { source: fallback, text: value };
+}
+
+function MetricValue({ value, plain = false }: { value: string; plain?: boolean }) {
+  const tone = plain ? null : enumeratedTone(value);
   if (!tone) {
     return <span className="t-data min-w-0 break-words text-right text-[var(--text-primary)]">{value}</span>;
   }
@@ -54,6 +69,7 @@ export default function MetricCards({
   activityIndex,
   bare = false,
   isSimulasi = false,
+  fromBackend = false,
 }: MetricCardsProps) {
   const rows: MetricRow[] = isSimulasi
     ? [
@@ -63,8 +79,8 @@ export default function MetricCards({
         { label: 'Infrastruktur vital', value: infraStatus },
       ]
     : [
-        { label: 'Pasut & muka laut', source: 'IOC', value: oceanStatus },
-        { label: 'Cuaca maritim', source: 'Open-Meteo', value: weatherStatus },
+        { label: 'Pasut & muka laut', source: fromBackend ? 'backend' : 'IOC', value: oceanStatus },
+        { label: 'Cuaca maritim', source: fromBackend ? 'backend' : 'Open-Meteo', value: weatherStatus },
         { label: 'Telemetri stasiun seismik' },
         { label: 'Deformasi GPS / InSAR' },
         { label: 'Infrastruktur vital' },
@@ -78,8 +94,10 @@ export default function MetricCards({
       </div>
       <ul className="divide-y divide-[var(--border-hairline)]">
         {rows.map((row) => {
-          const value = row.value?.trim();
-          const hasSource = isSimulasi || Boolean(row.source);
+          const raw = row.value?.trim();
+          const { source, text: value } =
+            raw && !isSimulasi && !fromBackend ? splitSource(raw, row.source) : { source: row.source, text: raw };
+          const hasSource = isSimulasi || Boolean(source);
           return (
             <li key={row.label} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2.5">
               <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -89,15 +107,15 @@ export default function MetricCards({
                     nilai latihan
                   </span>
                 ) : (
-                  row.source && (
+                  source && (
                     <span className="t-micro rounded border border-[var(--border-hairline)] px-1.5 normal-case">
-                      {row.source}
+                      {source}
                     </span>
                   )
                 )}
               </span>
               {hasSource && value ? (
-                <MetricValue value={value} />
+                <MetricValue value={value} plain={fromBackend} />
               ) : (
                 <span className="t-meta text-[var(--text-muted)]">
                   {hasSource ? 'tidak tersedia' : 'tidak ada sumber data'}

@@ -225,6 +225,8 @@ export interface RealtimeEarthquakesData {
   latest_bmkg: BMKGGempaDetail | null;
   recent_bmkg: SeismicEvent[];
   recent_usgs: SeismicEvent[];
+  /** BMKG's felt-earthquake list (gempadirasakan), with "Dirasakan"; absent on Go-backend payloads. */
+  felt_bmkg?: BMKGGempaDetail[];
   timestamp: string;
   /** Per-feed fetch outcome; absent when the payload comes from the Go backend. */
   provenance?: ProvenanceMap;
@@ -283,6 +285,7 @@ export interface AgentState {
 export type FeedId =
   | 'bmkg_latest'
   | 'bmkg_recent'
+  | 'bmkg_felt'
   | 'usgs'
   | 'ioc'
   | 'open_meteo'

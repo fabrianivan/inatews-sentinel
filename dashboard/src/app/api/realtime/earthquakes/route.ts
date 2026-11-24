@@ -11,7 +11,12 @@ export async function GET() {
     proxied &&
     (proxied.latest_bmkg || (Array.isArray(proxied.recent_bmkg) && proxied.recent_bmkg.length > 0))
   ) {
-    return NextResponse.json(proxied);
+    // The Go backend serialises a list it has not fetched yet as null; the client expects arrays.
+    return NextResponse.json({
+      ...proxied,
+      recent_bmkg: Array.isArray(proxied.recent_bmkg) ? proxied.recent_bmkg : [],
+      recent_usgs: Array.isArray(proxied.recent_usgs) ? proxied.recent_usgs : [],
+    });
   }
 
   const live = await fetchRealtimeEarthquakesData();

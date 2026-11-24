@@ -1,305 +1,169 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ChevronDown,
-  ChevronRight,
-  Cpu,
   Activity,
+  Bell,
+  BellRing,
+  Bot,
+  ChevronDown,
+  Cpu,
+  Database,
   Eye,
   EyeOff,
+  Mountain,
   Radio,
+  Waves,
+  X,
+  type LucideIcon,
 } from 'lucide-react';
 import type {
-  SystemStatus,
+  ActivityIndex,
   AIAnalysis,
-  TsunamiScenario,
-  LiveEvent,
-  ActivityIndex as ActivityIndexType,
-  RealtimeEarthquakesData,
-  VolcanoEruption,
-  LifecyclePhase,
   BMKGGempaDetail,
+  FeedState,
+  LifecyclePhase,
+  LiveEvent,
+  RealtimeEarthquakesData,
+  SeismicEvent,
+  SystemStatus,
+  TsunamiScenario,
+  VolcanoEruption,
 } from '@/lib/types';
-import ActivityGauge from '@/components/ActivityGauge';
-import MetricCards from '@/components/MetricCards';
-import EventStream from '@/components/EventStream';
+import type { LocalAlert } from '@/lib/localAlerts';
+import ActivityStrip from '@/components/ActivityStrip';
+import AlertToasts from '@/components/AlertToasts';
 import AIPanel from '@/components/AIPanel';
-import TsunamiPanel from '@/components/TsunamiPanel';
-import Seismograph from '@/components/Seismograph';
-import TacticalRibbon from '@/components/TacticalRibbon';
-import LatestQuakeCard from '@/components/LatestQuakeCard';
-import StatusBar from '@/components/StatusBar';
+import DrillStrip from '@/components/DrillStrip';
+import EventStream from '@/components/EventStream';
 import FlinkPanel from '@/components/FlinkPanel';
-import OceanPanel from '@/components/OceanPanel';
 import GovernanceView from '@/components/GovernanceView';
-import SeismogramAnalysisModal from '@/components/SeismogramAnalysisModal';
-import VolcanoSeismographHub from '@/components/VolcanoSeismographHub';
-import DrillFloatingBar from '@/components/DrillFloatingBar';
-import type { DrillScenarioMapData } from '@/components/Map';
-import { toggleBackendMode, triggerSimulation } from '@/hooks/useSSE';
+import LatestQuakeCard from '@/components/LatestQuakeCard';
+import LocalAlertsPanel from '@/components/LocalAlertsPanel';
+import type { DrillScenarioMapData, MapViewInsets } from '@/components/Map';
+import MetricCards from '@/components/MetricCards';
+import OceanPanel from '@/components/OceanPanel';
+import QuakePills from '@/components/QuakePills';
+import Seismograph from '@/components/Seismograph';
+import SourcePanel from '@/components/SourcePanel';
+import StatusBar, { type DashboardMode, type MastheadStatus } from '@/components/StatusBar';
+import { BackendTsunamiCard, BmkgTsunamiCard, DrillTsunamiCard } from '@/components/TsunamiCard';
+import VolcanoDetailCard from '@/components/VolcanoDetailCard';
 import { useAlertAudio } from '@/hooks/useAlertAudio';
+import { useLocalAlerts } from '@/hooks/useLocalAlerts';
+import { toggleBackendMode, triggerSimulation } from '@/hooks/useSSE';
+import { buildDrillAIAnalysis, type TelemetryPromptContext } from '@/lib/aiContext';
+import { advanceTone, TONE_SILENT, type ToneSituation } from '@/lib/alertTone';
+import { assessAttention, shortRegion, summarizeDays, type QuakeFeedHealth } from '@/lib/attention';
+import {
+  DEFAULT_DRILL_PHASE_NUMBER,
+  DEFAULT_DRILL_SCENARIO_ID,
+  DRILL_PHASES,
+  DRILL_SCENARIOS,
+  findDrillPhase,
+  findDrillScenario,
+  nextDrillPhaseNumber,
+  scenarioOriginMs,
+  warningLeadMin,
+  type DrillPhase,
+  type DrillScenario,
+  type DrillScenarioId,
+} from '@/lib/drillScenarios';
+import {
+  EMPTY_FEED_RECORD,
+  FEED_INFO,
+  FEED_ORDER,
+  feedHealthState,
+  reportedState,
+  type FeedHealth,
+  type FeedKey,
+  type FeedRecord,
+} from '@/lib/feeds';
+import { TONE_LABEL, type Tone } from '@/lib/severity';
 import type { OceanFeedResponse } from '@/lib/telemetry';
-import type { TelemetryPromptContext } from '@/lib/aiContext';
+import { formatDecimal, formatWibTime } from '@/lib/time';
+import {
+  acknowledgeNotice,
+  isNoticeInForce,
+  updateTsunamiNotice,
+  type TsunamiNotice,
+} from '@/lib/tsunamiNotice';
 
 const MapComponent = dynamic(() => import('@/components/Map'), {
   ssr: false,
   loading: () => (
-    <div className="flex h-full min-h-[380px] w-full items-center justify-center bg-[var(--surface-canvas)] text-xs font-medium text-[var(--text-muted)]">
-      Memuat peta tektonik &amp; jaringan InaTEWS...
+    <div className="t-meta flex h-full min-h-[380px] w-full items-center justify-center bg-[var(--surface-canvas)] text-[var(--text-muted)]">
+      Memuat peta…
     </div>
   ),
 });
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_BASE || '';
+const POLL_INTERVAL_MS = 20_000;
+/** Seconds each drill phase stays up during autoplay. */
+const AUTOPLAY_SECONDS = 15;
+const BASE_TITLE = 'INATEWS SENTINEL — dasbor pemantauan tidak resmi';
 
-const INITIAL_QUAKES: RealtimeEarthquakesData = {
-  latest_bmkg: {
-    Tanggal: '09 Sep 2026',
-    Jam: '13:21:30 WIB',
-    DateTime: '2026-09-09T06:21:30+00:00',
-    Coordinates: '-6.92,105.49',
-    Lintang: '6.92 LS',
-    Bujur: '105.49 BT',
-    Magnitude: '3.8',
-    Kedalaman: '25 km',
-    Wilayah: 'Pusat gempa berada di laut 31 km selatan Sumur',
-    Potensi: 'Gempa ini dirasakan untuk diteruskan pada masyarakat',
-    Dirasakan: 'II Sumur',
-    Shakemap: '20260909132130.mmi.jpg',
-  },
-  recent_bmkg: [
-    {
-      type: 'SEISMIC',
-      magnitude: 5.2,
-      depth: 10,
-      frequency: 3.6,
-      count: 1,
-      latitude: -8.08,
-      longitude: 120.56,
-      mmi: 7,
-      pga: 0.66,
-      fault_zone: '60 km TimurLaut RUTENG-MANGGARAI-NTT',
-      timestamp: '2026-09-08T04:40:29Z',
-    },
-    {
-      type: 'SEISMIC',
-      magnitude: 5.4,
-      depth: 10,
-      frequency: 3.7,
-      count: 1,
-      latitude: -8.42,
-      longitude: 109.02,
-      mmi: 7,
-      pga: 0.68,
-      fault_zone: '77 km Tenggara CILACAP-JATENG',
-      timestamp: '2026-09-04T05:04:59Z',
-    },
-    {
-      type: 'SEISMIC',
-      magnitude: 5.8,
-      depth: 10,
-      frequency: 3.9,
-      count: 1,
-      latitude: -7.72,
-      longitude: 104.47,
-      mmi: 8,
-      pga: 0.74,
-      fault_zone: '170 km BaratDaya SUMUR-BANTEN',
-      timestamp: '2026-08-21T17:41:43Z',
-    },
-  ],
-  recent_usgs: [
-    {
-      type: 'SEISMIC',
-      magnitude: 5.0,
-      depth: 10,
-      frequency: 3.5,
-      count: 1,
-      latitude: 4.0172,
-      longitude: 125.3233,
-      mmi: 7,
-      pga: 0.63,
-      fault_zone: '154 km S of Sarangani, Philippines',
-      timestamp: '2026-09-09T07:07:00Z',
-    },
-    {
-      type: 'SEISMIC',
-      magnitude: 4.5,
-      depth: 39.5,
-      frequency: 3.25,
-      count: 1,
-      latitude: -4.9167,
-      longitude: 102.8454,
-      mmi: 6,
-      pga: 0.45,
-      fault_zone: '108 km SSW of Pagar Alam, Indonesia',
-      timestamp: '2026-09-09T00:23:00Z',
-    },
-  ],
-  timestamp: new Date().toISOString(),
-};
+type StatusPayload = SystemStatus & { activity_index?: ActivityIndex };
 
-const INITIAL_AI_ANALYSIS: AIAnalysis = {
-  status: 'ADVISORY',
-  threat_summary: 'Monitoring Kluster Seismisitas Aktif Segmen Selat Sunda (M3.8 Sumur) & NTT (M5.2 Ruteng)',
-  observations: [
-    'BMKG TEWS mendeteksi gempa terkini M3.8 di kedalaman 25 km pesisir Sumur-Banten (Selat Sunda).',
-    'Tercatat kluster seismik M5.0+ regional di Ruteng NTT (M5.2) dan Cilacap Jawa Tengah (M5.4).',
-    'Telemetri 12 stasiun broadband BMKG & 34 sensor pasang surut IOC UNESCO terpantau stabil tanpa anomali muka laut destruktif.',
-    'Algoritma Flink CEP mencatat indeks intensitas seismik nasional pada level 35.0% (Ambang batas waspada).',
-  ],
-  assessment:
-    'Sistem InaTEWS Sentinel mengonfirmasi aktivitas tektonik regional berada dalam batas terkontrol. Tidak ada indikasi pembentukan gelombang tsunami pasca-event Sumur & Ruteng. Koordinasi antar-lembaga tetap disiagakan untuk memantau potensi gempa susulan.',
-  recommendations: [
-    'Pertahankan pemantauan real-time kontinyu 24/7 jaringan stasiun seismik broadband BMKG.',
-    'Pastikan kanal diseminasi Warning Receiver System (WRS D-VBI) dan SMS blast darurat BNPB dalam status siaga.',
-    'Masyarakat diimbau tetap tenang dan hanya merujuk kanal informasi resmi BMKG dan BNPB.',
-  ],
-  agency_actions: [
-    {
-      agency: 'BMKG',
-      priority: 'URGENT',
-      action: 'Monitoring kontinyu focal mechanism hiposenter dan update peta guncangan ShakeMap nasional 24/7.',
-    },
-    {
-      agency: 'BNPB',
-      priority: 'STANDBY',
-      action: 'Koordinasi Posko Siaga Bencana dengan BPBD tingkat provinsi dan kabupaten terdekat dari episenter.',
-    },
-    {
-      agency: 'BASARNAS',
-      priority: 'STANDBY',
-      action: 'Siaga regu Search & Rescue maritim di pelabuhan dan pangkalan terdekat.',
-    },
-  ],
-  hazard_details: {
-    fault_mechanism: 'Subduction Interplate Thrust & Splay Faulting',
-    estimated_coseismic_slip: '<0.2 meter',
-    aftershock_risk: 'LOW (Ambang batas normal)',
-    tsunami_runup_estimate: 'Tidak berpotensi tsunami',
-    evacuation_window_min: 120,
-  },
-  confidence: 0.89,
-  latency_ms: 142,
-  model_used: 'Google Gemini 2.5 Flash',
-  disclaimer: 'Real-time decision support based on streaming sensor telemetry. Not an official BMKG earthquake prediction.',
-  contributing_factors: [
-    { indicator: 'Mainshock Magnitude', value: 'M3.8', change: 'BMKG TEWS Verified', significance: 0.94 },
-    { indicator: 'Hypocenter Depth', value: '25 km', change: 'Crustal Interface', significance: 0.81 },
-    { indicator: 'Sea Level Anomaly', value: 'Nominal (<0.05m)', change: 'IOC Gauge Stable', significance: 0.88 },
-    { indicator: 'Flink Intensity Index', value: '35.0%', change: 'Normal Baseline', significance: 0.75 },
-  ],
-  timestamp: new Date().toISOString(),
-};
+/** One stable empty list, so "no data yet" does not look like new data on every render. */
+const NO_EVENTS: SeismicEvent[] = [];
 
-const INITIAL_STATUS: SystemStatus = {
-  seismic_intensity: 35.0,
-  ocean_status: 'IOC UNESCO LIVE',
-  weather_status: 'OPEN-METEO ONLINE',
-  infra_status: 'OPERATIONAL',
-  active_alerts: 0,
-  risk_level: 'NORMAL',
-  trend_direction: 'LIVE STREAM ACTIVE',
-  last_update: new Date().toISOString(),
-};
+/** Fetches a route from the configured backend, falling back to the local Next route. */
+async function fetchJson<T>(path: string): Promise<T> {
+  const attempt = async (url: string) => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`${url} -> ${response.status}`);
+    return (await response.json()) as T;
+  };
+  if (!API_BASE) return attempt(path);
+  try {
+    return await attempt(`${API_BASE}${path}`);
+  } catch {
+    return attempt(path);
+  }
+}
 
-const INITIAL_EVENTS: LiveEvent[] = [
-  {
-    id: 'init-1',
-    type: 'SEISMIC',
-    description: 'BMKG TEWS: Pemantauan kontinyu jaringan seismik broadband nasional aktif',
-    severity: 'LOW',
-    timestamp: '2026-09-08T08:00:00.000Z',
-  },
-  {
-    id: 'init-2',
-    type: 'STATION',
-    description: 'Stasiun LEM (Lembang, Jawa Barat): Kualitas sinyal 99.8%, PGA 0.0018g [ONLINE]',
-    severity: 'LOW',
-    timestamp: '2026-09-08T08:01:00.000Z',
-  },
-  {
-    id: 'init-3',
-    type: 'OCEAN',
-    description: 'InaTEWS Buoy & Tide Gauge IOC: Selat Sunda & Pesisir Selatan Jawa nominal',
-    severity: 'LOW',
-    timestamp: '2026-09-08T08:02:00.000Z',
-  },
-  {
-    id: 'init-4',
-    type: 'VOLCANO',
-    description: 'MAGMA PVMBG: Monitoring kontinyu aktivitas vulkanik kawah aktif Nusantara',
-    severity: 'LOW',
-    timestamp: '2026-09-08T08:03:00.000Z',
-  },
-  {
-    id: 'init-5',
-    type: 'INFRASTRUCTURE',
-    description: 'Fasilitas Kritis BNPB / BPBD: Jalur telemetri darurat operasional 100%',
-    severity: 'LOW',
-    timestamp: '2026-09-08T08:04:00.000Z',
-  },
-];
+function eventSeverityFromMagnitude(magnitude: unknown): LiveEvent['severity'] {
+  if (typeof magnitude !== 'number') return 'LOW';
+  if (magnitude >= 7.0) return 'CRITICAL';
+  if (magnitude >= 6.0) return 'HIGH';
+  if (magnitude >= 5.0) return 'MEDIUM';
+  return 'LOW';
+}
 
+/** Turns a raw stream frame into a list row; frames that already carry a description pass through. */
 function parseLiveEvent(data: Record<string, unknown>, id: string): LiveEvent {
-  const rawType = String(data.type || 'UNKNOWN');
-  const type = rawType.toUpperCase();
+  const type = String(data.type || 'UNKNOWN').toUpperCase();
   let description = data.description ? String(data.description) : '';
-  let severity = (data.severity ? String(data.severity) : 'LOW') as
-    | 'LOW'
-    | 'MEDIUM'
-    | 'HIGH'
-    | 'CRITICAL';
+  let severity = data.severity ? String(data.severity) : 'LOW';
 
   if (!description) {
     switch (type) {
       case 'SEISMIC': {
-        const mag = typeof data.magnitude === 'number' ? data.magnitude.toFixed(1) : '?';
-        const depth = typeof data.depth === 'number' ? data.depth.toFixed(0) : '?';
-        const fault = String(data.fault_zone || 'Wilayah Indonesia');
-        description = `Gempa Bumi M${mag} — Kedalaman ${depth}km (${fault})`;
-        severity =
-          typeof data.magnitude === 'number' && data.magnitude >= 7.0
-            ? 'CRITICAL'
-            : typeof data.magnitude === 'number' && data.magnitude >= 5.5
-            ? 'HIGH'
-            : typeof data.magnitude === 'number' && data.magnitude >= 4.0
-            ? 'MEDIUM'
-            : 'LOW';
+        const magnitude = typeof data.magnitude === 'number' ? `M${formatDecimal(data.magnitude)}` : 'magnitudo tidak tersedia';
+        const depth = typeof data.depth === 'number' ? ` · ${Math.round(data.depth)} km` : '';
+        // The row names its source when the frame does; a backend frame that does not is left unattributed.
+        const source = typeof data.source === 'string' && data.source ? `${data.source} · ` : '';
+        description = `${source}Gempa ${magnitude}${depth} · ${String(data.fault_zone || 'lokasi tidak tersedia')}`;
+        severity = eventSeverityFromMagnitude(data.magnitude);
         break;
       }
-      case 'STATION': {
-        const st = String(data.station_id || 'Station');
-        const pga = typeof data.pga_recorded === 'number' ? data.pga_recorded.toFixed(4) : '?';
-        const status = String(data.status || 'ONLINE');
-        description = `Stasiun ${st}: PGA ${pga}g [${status}]`;
-        severity = status === 'CLIPPED' ? 'CRITICAL' : 'LOW';
+      case 'STATION':
+        description = `Stasiun ${String(data.station_id || data.station_name || 'tanpa nama')}`;
         break;
-      }
-      case 'OCEAN': {
-        const sensor = String(data.sensor_id || 'Tide-Gauge');
-        const wh = typeof data.wave_height === 'number' ? data.wave_height.toFixed(2) : '?';
-        description = `${sensor}: Fluktuasi muka laut ${wh}m`;
-        severity =
-          typeof data.wave_height === 'number' && data.wave_height > 2.0
-            ? 'CRITICAL'
-            : typeof data.wave_height === 'number' && data.wave_height > 0.8
-            ? 'HIGH'
-            : 'LOW';
+      case 'OCEAN':
+        description = `Stasiun pasut ${String(data.sensor_id || 'tanpa nama')}`;
         break;
-      }
-      case 'WEATHER': {
-        const ws = typeof data.wind_speed === 'number' ? data.wind_speed.toFixed(0) : '?';
-        const wd = String(data.wind_direction || 'N');
-        description = `Cuaca: Kecepatan angin ${ws} km/h arah ${wd}`;
-        severity = 'LOW';
+      case 'WEATHER':
+        description =
+          typeof data.wind_speed === 'number'
+            ? `Cuaca: angin ${Math.round(data.wind_speed)} km/jam ${String(data.wind_direction || '')}`.trim()
+            : 'Cuaca: pembaruan diterima';
         break;
-      }
       default:
-        description = `${type} telemetri diterima`;
-        severity = 'LOW';
+        description = `${type}: pembaruan diterima`;
     }
   }
 
@@ -313,265 +177,187 @@ function parseLiveEvent(data: Record<string, unknown>, id: string): LiveEvent {
   };
 }
 
-interface DrillScenarioPreset {
-  id: 'sunda-strait' | 'south-java' | 'mentawai' | 'palu-koro';
-  name: string;
-  shortLabel: string;
-  faultZone: string;
-  magnitude: number;
-  depth: number;
-  lat: number;
-  lon: number;
-  tsunamiHeight: number;
-  sensorId: string;
-  affectedZones: string[];
-  faultMechanism: string;
-  coseismicSlip: string;
-  evacuationWindowMin: number;
-  oceanSensorLabel: string;
+const MAX_EVENT_ROWS = 50;
+const MAX_SYNTHETIC_ROWS = 6;
+
+/**
+ * Trims the event list, newest first. Rows the stream composes itself (heartbeats, the
+ * station-list line) have their own small budget, so they can never push a reported
+ * earthquake out of the list.
+ */
+function capEvents(rows: LiveEvent[]): LiveEvent[] {
+  const kept: LiveEvent[] = [];
+  let synthetic = 0;
+  for (const row of rows) {
+    if (row.data?.synthetic === true) {
+      if (synthetic >= MAX_SYNTHETIC_ROWS) continue;
+      synthetic += 1;
+    }
+    kept.push(row);
+    if (kept.length >= MAX_EVENT_ROWS) break;
+  }
+  return kept;
 }
 
-const DRILL_SCENARIOS: DrillScenarioPreset[] = [
-  {
-    id: 'sunda-strait',
-    name: 'Sunda Strait Megathrust M8.2',
-    shortLabel: 'Selat Sunda (M8.2)',
-    faultZone: 'Megathrust Selat Sunda-Banten',
-    magnitude: 8.2,
-    depth: 25,
-    lat: -6.8,
-    lon: 105.2,
-    tsunamiHeight: 12.0,
-    sensorId: 'BUOY-INA-01 (Selat Sunda)',
-    affectedZones: [
-      'Pesisir Pandeglang / Ujung Kulon',
-      'Anyer & Carita',
-      'Lampung Selatan / Kalianda',
-      'Pelabuhan Ratu',
-      'Krui Pesisir Barat',
-    ],
-    faultMechanism: 'Subduksi Oblique Thrust (Indo-Australia vs Eurasia)',
-    coseismicSlip: '7.5 - 11.2 m pada kedalaman dangkal 25 km',
-    evacuationWindowMin: 18,
-    oceanSensorLabel: 'BUOY-INA-01 & PASUT CIWANDAN',
-  },
-  {
-    id: 'south-java',
-    name: 'South Java Megathrust M8.8',
-    shortLabel: 'Selatan Jawa (M8.8)',
-    faultZone: 'Zona Subduksi Selatan Jawa-Cilacap',
-    magnitude: 8.8,
-    depth: 15,
-    lat: -9.1,
-    lon: 109.5,
-    tsunamiHeight: 20.0,
-    sensorId: 'BUOY-INA-03 (Selatan Jawa)',
-    affectedZones: [
-      'Cilacap Pesisir',
-      'Pangandaran & Kebumen',
-      'Yogyakarta Selatan / Parangtritis',
-      'Prigi Trenggalek',
-      'Pelabuhan Ratu',
-    ],
-    faultMechanism: 'Full-Segment Megathrust Locking Release (Java Trench)',
-    coseismicSlip: '11.0 - 16.5 m pada zona seismogenik 15 km',
-    evacuationWindowMin: 22,
-    oceanSensorLabel: 'BUOY-INA-03 & PASUT CILACAP',
-  },
-  {
-    id: 'mentawai',
-    name: 'Mentawai-Siberut Megathrust M9.0',
-    shortLabel: 'Mentawai-Siberut (M9.0)',
-    faultZone: 'Segmen Mentawai-Siberut Sumatra Trench',
-    magnitude: 9.0,
-    depth: 12,
-    lat: -2.5,
-    lon: 99.8,
-    tsunamiHeight: 25.0,
-    sensorId: 'BUOY-INA-05 (Mentawai Siberut)',
-    affectedZones: [
-      'Padang / Teluk Bayur',
-      'Kepulauan Mentawai & Siberut',
-      'Sibolga Sumatra Utara',
-      'Bengkulu Pesisir',
-      'Pesisir Barat Sumatra Barat',
-    ],
-    faultMechanism: 'Mega-Rupture Interplate Thrust (>350 km panjang patahan)',
-    coseismicSlip: '14.0 - 21.0 m uplift dasar samudera',
-    evacuationWindowMin: 15,
-    oceanSensorLabel: 'BUOY-INA-05 & PASUT TELUK BAYUR',
-  },
-  {
-    id: 'palu-koro',
-    name: 'Palu-Koro Strike-Slip M7.5',
-    shortLabel: 'Palu-Koro (M7.5)',
-    faultZone: 'Sesar Aktif Palu-Koro & Teluk Palu',
-    magnitude: 7.5,
-    depth: 10,
-    lat: -0.18,
-    lon: 119.85,
-    tsunamiHeight: 11.0,
-    sensorId: 'BUOY-INA-07 (Selat Makassar - Toli-Toli)',
-    affectedZones: [
-      'Teluk Palu & Donggala',
-      'Toli-Toli Sulteng',
-      'Mamuju & Majene',
-      'Balikpapan Selat Makassar',
-    ],
-    faultMechanism: 'Supershear Left-Lateral Strike-Slip + Submarine Landslide',
-    coseismicSlip: '4.8 - 6.9 m sesar mendatar dangkal',
-    evacuationWindowMin: 6,
-    oceanSensorLabel: 'BUOY-INA-07 & PASUT TOLI-TOLI',
-  },
-];
+const ATTENTION_EVENT_SEVERITY: Record<DrillPhase['attention'], LiveEvent['severity']> = {
+  rutin: 'LOW',
+  meningkat: 'MEDIUM',
+  tinggi: 'HIGH',
+};
 
-interface DrillPhasePreset {
-  phaseNumber: number;
-  phaseName: string;
-  shortLabel: string;
-  title: string;
-  activityLevel: number;
-  seismicEnergy: number;
-  tsunamiActive: boolean;
-  tsunamiFactor: number;
-  riskLevel: string;
-  trendDirection: string;
-  activeAlerts: number;
-  earthquakeCount: number;
-  mmi: number;
-  weatherStatus: string;
-  infraStatus: string;
+/** Rows a drill adds to the event list; `data.simulation` keeps them marked as drill content. */
+function buildDrillEvents(scenario: DrillScenario, phase: DrillPhase, atIso: string, nextId: () => string): LiveEvent[] {
+  const rows: LiveEvent[] = [
+    {
+      id: nextId(),
+      type: 'SEISMIC',
+      description: `[DRILL ${phase.shortLabel}] ${scenario.name} — ${phase.title}`,
+      severity: ATTENTION_EVENT_SEVERITY[phase.attention],
+      timestamp: atIso,
+      data: { simulation: true },
+    },
+  ];
+  if (phase.tsunamiActive) {
+    rows.unshift({
+      id: nextId(),
+      type: 'OCEAN',
+      description: `[DRILL] Sensor skenario: lonjakan muka laut +${formatDecimal(scenario.tsunamiHeight * phase.tsunamiFactor)} m di ${scenario.affectedZones[0]} — nilai latihan`,
+      severity: 'CRITICAL',
+      timestamp: atIso,
+      data: { simulation: true },
+    });
+  }
+  return rows;
 }
 
-const DRILL_PHASES: DrillPhasePreset[] = [
-  {
-    phaseNumber: 1,
-    phaseName: 'SEISMIC_BASELINE',
-    shortLabel: '1. Baseline',
-    title: 'Pemantauan Pre-Event & Kalibrasi Sensor',
-    activityLevel: 18.0,
-    seismicEnergy: 1.8,
-    tsunamiActive: false,
-    tsunamiFactor: 0.0,
-    riskLevel: 'NORMAL',
-    trendDirection: 'STABLE',
-    activeAlerts: 0,
-    earthquakeCount: 4,
-    mmi: 2.5,
-    weatherStatus: 'CUACA PESISIR TERPANTAU',
-    infraStatus: '100% OPERASIONAL',
-  },
-  {
-    phaseNumber: 2,
-    phaseName: 'PRECURSOR_SWARM',
-    shortLabel: '2. Precursor Swarm',
-    title: 'Swarm Gempa Pembuka & Anomali Deformasi',
-    activityLevel: 52.0,
-    seismicEnergy: 4.6,
-    tsunamiActive: false,
-    tsunamiFactor: 0.0,
-    riskLevel: 'WASPADA',
-    trendDirection: 'RISING',
-    activeAlerts: 2,
-    earthquakeCount: 19,
-    mmi: 4.8,
-    weatherStatus: 'SIAGA TELEMETRI GPS/InSAR',
-    infraStatus: 'STANDBY DARURAT',
-  },
-  {
-    phaseNumber: 3,
-    phaseName: 'MAINSHOCK_RUPTURE',
-    shortLabel: '3. Mainshock Rupture',
-    title: 'Rupture Utama & Aktivasi Sirene InaTEWS',
-    activityLevel: 94.0,
-    seismicEnergy: 9.2,
-    tsunamiActive: true,
-    tsunamiFactor: 0.65,
-    riskLevel: 'CRITICAL',
-    trendDirection: 'SPIKE',
-    activeAlerts: 5,
-    earthquakeCount: 38,
-    mmi: 8.6,
-    weatherStatus: 'SIRENE PESISIR AKTIF',
-    infraStatus: 'CLIPPING & OVERLOAD SEKTOR PESISIR',
-  },
-  {
-    phaseNumber: 4,
-    phaseName: 'TSUNAMI_PROPAGATION',
-    shortLabel: '4. Tsunami Wavefront',
-    title: 'Penjalaran Gelombang & Konfirmasi DART Buoy',
-    activityLevel: 98.0,
-    seismicEnergy: 8.7,
-    tsunamiActive: true,
-    tsunamiFactor: 1.0,
-    riskLevel: 'CRITICAL',
-    trendDirection: 'CRITICAL',
-    activeAlerts: 8,
-    earthquakeCount: 47,
-    mmi: 8.9,
-    weatherStatus: 'GELOMBANG TSUNAMI AKTIF',
-    infraStatus: 'EVAKUASI DARURAT NASIONAL',
-  },
-  {
-    phaseNumber: 5,
-    phaseName: 'AFTERSHOCK_SAR',
-    shortLabel: '5. Aftershock & SAR',
-    title: 'Gempa Susulan & Koordinasi Operasi SAR',
-    activityLevel: 68.0,
-    seismicEnergy: 5.9,
-    tsunamiActive: true,
-    tsunamiFactor: 0.42,
-    riskLevel: 'HIGH',
-    trendDirection: 'FALLING',
-    activeAlerts: 4,
-    earthquakeCount: 63,
-    mmi: 6.2,
-    weatherStatus: 'PENANGANAN BANJIR ROB & SURUT',
-    infraStatus: 'KORIDOR SAR & LOGISTIK AKTIF',
-  },
+/** True from `minWidthPx` up (a Tailwind breakpoint); null until mounted. */
+function useMinWidth(minWidthPx: number): boolean | null {
+  const [matches, setMatches] = useState<boolean | null>(null);
+  useEffect(() => {
+    const query = window.matchMedia(`(min-width: ${minWidthPx}px)`);
+    const update = () => setMatches(query.matches);
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, [minWidthPx]);
+  return matches;
+}
+
+/**
+ * Everything the dashboard shows besides the map lives in one panel on the map, one topic at
+ * a time: the inspector column on a desktop, a sheet (phone) or side panel (tablet) opened
+ * from the icon dock below that. Nothing sits below the map.
+ */
+type PanelId = 'gempa' | 'telemetri' | 'gunung' | 'analisis' | 'pasut' | 'notifikasi' | 'sumber';
+
+const PANELS: { id: PanelId; label: string; Icon: LucideIcon }[] = [
+  { id: 'gempa', label: 'Gempa terkini', Icon: Radio },
+  { id: 'telemetri', label: 'Telemetri', Icon: Activity },
+  { id: 'gunung', label: 'Gunung api', Icon: Mountain },
+  { id: 'analisis', label: 'Pendukung keputusan', Icon: Bot },
+  { id: 'pasut', label: 'Stasiun pasut', Icon: Waves },
+  { id: 'notifikasi', label: 'Notifikasi lokasi', Icon: Bell },
+  { id: 'sumber', label: 'Sumber data dan arsitektur', Icon: Database },
 ];
+
+/** Below `lg` the icon dock runs along the map's bottom edge; what sits above it keeps this clear (px). */
+const DOCK_CLEARANCE = 72;
+
+const INITIAL_FEED_RECORDS: Record<FeedKey, FeedRecord> = {
+  bmkg: EMPTY_FEED_RECORD,
+  usgs: EMPTY_FEED_RECORD,
+  ioc: EMPTY_FEED_RECORD,
+  pvmbg: EMPTY_FEED_RECORD,
+  weather: EMPTY_FEED_RECORD,
+  ai: EMPTY_FEED_RECORD,
+};
 
 export default function Home() {
-  const [status, setStatus] = useState<SystemStatus | null>(INITIAL_STATUS);
-  const [activityIndex, setActivityIndex] = useState<ActivityIndexType | null>(null);
-  const [aiAnalysis, setAiAnalysis] = useState<AIAnalysis | null>(INITIAL_AI_ANALYSIS);
-  const [tsunami, setTsunami] = useState<TsunamiScenario | null>(null);
-  const [events, setEvents] = useState<LiveEvent[]>(INITIAL_EVENTS);
-  const [realQuakes, setRealQuakes] = useState<RealtimeEarthquakesData | null>(INITIAL_QUAKES);
+  // ---- Live data ----------------------------------------------------------
+  const [status, setStatus] = useState<SystemStatus | null>(null);
+  const [activityIndex, setActivityIndex] = useState<ActivityIndex | null>(null);
+  const [aiAnalysis, setAiAnalysis] = useState<AIAnalysis | null>(null);
+  const [realQuakes, setRealQuakes] = useState<RealtimeEarthquakesData | null>(null);
+  /** When `realQuakes` was received (epoch ms): what "seen on the feed" means between polls. */
+  const [realQuakesAt, setRealQuakesAt] = useState<number | null>(null);
   const [volcanoes, setVolcanoes] = useState<VolcanoEruption[]>([]);
   const [oceanFeed, setOceanFeed] = useState<OceanFeedResponse | null>(null);
+  const [events, setEvents] = useState<LiveEvent[]>([]);
+  const [feedRecords, setFeedRecords] = useState<Record<FeedKey, FeedRecord>>(INITIAL_FEED_RECORDS);
+  /** Coarse page clock, advanced once per poll; null until mounted. Second-level clocks live in leaf components. */
+  const [clock, setClock] = useState<number | null>(null);
+  /** BMKG's tsunami-potential statement, latched so a later quake cannot erase it. */
+  const [notice, setNotice] = useState<TsunamiNotice | null>(null);
+  /** Tsunami scenario reported by the Go backend (never set on the standalone path). */
+  const [backendTsunami, setBackendTsunami] = useState<TsunamiScenario | null>(null);
+
+  // ---- Drill --------------------------------------------------------------
+  const [dashboardMode, setDashboardMode] = useState<DashboardMode>('REAL');
+  const [selectedScenarioId, setSelectedScenarioId] = useState<DrillScenarioId>(DEFAULT_DRILL_SCENARIO_ID);
+  const [drillPhaseNumber, setDrillPhaseNumber] = useState<number>(DEFAULT_DRILL_PHASE_NUMBER);
+  const [phaseEnteredAt, setPhaseEnteredAt] = useState<number>(0);
+  const [isDrillPlaying, setIsDrillPlaying] = useState(false);
+
+  // ---- View ---------------------------------------------------------------
   const [selectedVolcano, setSelectedVolcano] = useState<string | null>('BMKG_REGIONAL');
-  const [inspectingSeismogram, setInspectingSeismogram] = useState<VolcanoEruption | null>(null);
-  const [dashboardMode, setDashboardMode] = useState<'REAL' | 'SIMULASI'>('REAL');
-  const [selectedScenarioId, setSelectedScenarioId] = useState<DrillScenarioPreset['id']>('sunda-strait');
-  const [drillPhaseNumber, setDrillPhaseNumber] = useState<number>(4);
-  const [drillActivatedAt, setDrillActivatedAt] = useState<string>('');
+  /** The volcano the panel shows; it stays on the last one picked while the BMKG trace is selected. */
+  const [hubVolcano, setHubVolcano] = useState('Anak Krakatau');
+  /** Below `lg` the panel is a sheet (phone) or side panel (tablet) over the map; this is whether it is up. */
+  const [sheetOpen, setSheetOpen] = useState(false);
+  /** The last "Analisis PVMBG" request: which volcano, and a number that changes with each request. */
+  const [analysisFor, setAnalysisFor] = useState<{ name: string; nonce: number } | null>(null);
+  /** Never reset, so asking for the same volcano's analysis twice is still a new request. */
+  const analysisNonceRef = useRef(0);
+  /** Height of the sheet on a phone, measured, so the map keeps its target above it. */
+  const [sheetHeight, setSheetHeight] = useState(0);
   const [focusCoords, setFocusCoords] = useState<{ lat: number; lon: number } | null>(null);
-  const [connected, setConnected] = useState(false);
-
-  // Atmospheric Obsidian Glass UI State
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  const [isAudioMuted, setIsAudioMuted] = useState<boolean>(true);
-  const [isDrillPlaying, setIsDrillPlaying] = useState<boolean>(false);
-  const [alertDismissed, setAlertDismissed] = useState<boolean>(false);
-  const [showHudInspector, setShowHudInspector] = useState<boolean>(true);
-  const [inspectorTab, setInspectorTab] = useState<'gempa' | 'telemetri'>('gempa');
-  const [showInfraArchitecture, setShowInfraArchitecture] = useState<boolean>(false);
+  const [isAudioMuted, setIsAudioMuted] = useState(true);
+  const [showHudInspector, setShowHudInspector] = useState(true);
+  /** The panel's topic, shared by the desktop inspector and the sheet below `lg`. */
+  const [inspectorTab, setInspectorTab] = useState<PanelId>('gempa');
+  const [showInfraArchitecture, setShowInfraArchitecture] = useState(false);
+  /** Key of the warning the operator collapsed; a different warning opens expanded again. */
+  const [collapsedAlertKey, setCollapsedAlertKey] = useState<string | null>(null);
+  const [systemMessage, setSystemMessage] = useState<string | null>(null);
+  const [hudTop, setHudTop] = useState<number | null>(null);
 
+  const isDrill = dashboardMode === 'SIMULASI';
+  /** `lg`: the inspector column sits beside the map. */
+  const isDesktop = useMinWidth(1024);
+  /** `sm`: below it the panel is a bottom sheet, above it a side panel. */
+  const isWide = useMinWidth(640);
   const { playChime } = useAlertAudio(isAudioMuted);
 
+  const headerRef = useRef<HTMLElement | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const sseRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastEventIdRef = useRef<string>('');
+  const eventCounter = useRef(0);
+  /** Standalone payloads carry provenance; Go-backend payloads do not. */
+  const standaloneRef = useRef(true);
+  /** Backend tsunami frames are ignored while a drill runs here and briefly after it ends. */
+  const isDrillRef = useRef(false);
+  const ignoreBackendTsunamiUntilRef = useRef(0);
+  /** What the alert tone last sounded for, so it sounds once per escalation. */
+  // Live and drill tones are remembered apart: ending a drill must not replay the tone for a
+  // live earthquake that already sounded, and a new drill starts from silence.
+  const liveToneRef = useRef(TONE_SILENT);
+  const drillToneRef = useRef(TONE_SILENT);
+
+  const nextEventId = useCallback(() => `evt-${++eventCounter.current}`, []);
+
+  // ---- Theme --------------------------------------------------------------
   useEffect(() => {
+    let saved: string | null = null;
     try {
-      const saved = window.localStorage.getItem('inatews-theme');
-      if (saved === 'light' || saved === 'dark') {
-        setTheme(saved);
-        document.documentElement.setAttribute('data-theme', saved);
-      } else {
-        document.documentElement.setAttribute('data-theme', 'dark');
-      }
+      saved = window.localStorage.getItem('inatews-theme');
     } catch {
-      document.documentElement.setAttribute('data-theme', 'dark');
+      // storage may be unavailable; the default theme stays
     }
+    const initial = saved === 'light' ? 'light' : 'dark';
+    setTheme(initial);
+    document.documentElement.setAttribute('data-theme', initial);
   }, []);
 
   const handleToggleTheme = useCallback(() => {
@@ -587,203 +373,164 @@ export default function Home() {
     });
   }, []);
 
-  const eventSourceRef = useRef<EventSource | null>(null);
-  const sseRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const eventCounter = useRef(100);
-
-  // Fetch real BMKG earthquakes & system status
-  const fetchRealQuakes = useCallback(() => {
-    const targetUrl = API_BASE ? `${API_BASE}/api/realtime/earthquakes` : '/api/realtime/earthquakes';
-    fetch(targetUrl)
-      .then((res) => {
-        if (!res.ok) throw new Error(`Failed to fetch real quakes: ${res.status}`);
-        return res.json();
-      })
-      .then((data: RealtimeEarthquakesData) => {
-        if (data && (data.latest_bmkg || (data.recent_bmkg && data.recent_bmkg.length > 0))) {
-          setRealQuakes(data);
-        }
-      })
-      .catch((err) => {
-        console.warn('Primary earthquake fetch failed, falling back to local /api/realtime/earthquakes:', err);
-        if (API_BASE) {
-          fetch('/api/realtime/earthquakes')
-            .then((r) => (r.ok ? r.json() : null))
-            .then((localData: RealtimeEarthquakesData | null) => {
-              if (localData && (localData.latest_bmkg || (localData.recent_bmkg && localData.recent_bmkg.length > 0))) {
-                setRealQuakes(localData);
-              }
-            })
-            .catch(() => {});
-        }
-      });
-  }, []);
-
-  const fetchVolcanoes = useCallback(() => {
-    const targetUrl = API_BASE ? `${API_BASE}/api/realtime/volcanoes` : '/api/realtime/volcanoes';
-    fetch(targetUrl)
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to fetch volcanoes');
-        return res.json();
-      })
-      .then((data: VolcanoEruption[]) => {
-        if (Array.isArray(data) && data.length > 0) {
-          setVolcanoes(data);
-        }
-      })
-      .catch((err) => {
-        console.warn('Primary volcano fetch failed, falling back to local route:', err);
-        if (API_BASE) {
-          fetch('/api/realtime/volcanoes')
-            .then((r) => (r.ok ? r.json() : null))
-            .then((localData: VolcanoEruption[] | null) => {
-              if (Array.isArray(localData) && localData.length > 0) {
-                setVolcanoes(localData);
-              }
-            })
-            .catch(() => {});
-        }
-      });
-  }, []);
-
-  const fetchAI = useCallback(() => {
-    const targetUrl = API_BASE ? `${API_BASE}/api/ai/latest` : '/api/ai/latest';
-    fetch(targetUrl)
-      .then((res) => {
-        if (!res.ok) throw new Error('AI fetch failed');
-        return res.json();
-      })
-      .then((data: AIAnalysis) => {
-        if (data && data.status) {
-          setAiAnalysis(data);
-        }
-      })
-      .catch((err) => {
-        console.warn('Primary AI fetch failed, falling back to local /api/ai/latest:', err);
-        if (API_BASE) {
-          fetch('/api/ai/latest')
-            .then((r) => (r.ok ? r.json() : null))
-            .then((localData: AIAnalysis | null) => {
-              if (localData && localData.status) {
-                setAiAnalysis(localData);
-              }
-            })
-            .catch(() => {});
-        }
-      });
-  }, []);
-
-  const fetchOceanFeed = useCallback(() => {
-    const targetUrl = API_BASE ? `${API_BASE}/api/realtime/ocean` : '/api/realtime/ocean';
-    fetch(targetUrl)
-      .then((res) => {
-        if (!res.ok) throw new Error('Ocean fetch failed');
-        return res.json();
-      })
-      .then((data: OceanFeedResponse) => {
-        if (data && Array.isArray(data.stations) && data.stations.length > 0) {
-          setOceanFeed(data);
-        }
-      })
-      .catch(() => {
-        if (API_BASE) {
-          fetch('/api/realtime/ocean')
-            .then((r) => (r.ok ? r.json() : null))
-            .then((localData: OceanFeedResponse | null) => {
-              if (localData && Array.isArray(localData.stations) && localData.stations.length > 0) {
-                setOceanFeed(localData);
-              }
-            })
-            .catch(() => {});
-        }
-      });
-  }, []);
-
-  const fetchStatus = useCallback(() => {
-    const applyStatusPayload = (data: SystemStatus & { activity_index?: ActivityIndexType }) => {
-      setStatus(data);
-      if (data.activity_index) setActivityIndex(data.activity_index);
-      if (data.latest_ai) setAiAnalysis(data.latest_ai);
-      if (data.tsunami_scenario?.active) setTsunami(data.tsunami_scenario);
-    };
-
-    const targetUrl = API_BASE ? `${API_BASE}/api/status` : '/api/status';
-    fetch(targetUrl)
-      .then((res) => {
-        if (!res.ok) throw new Error('Status fetch failed');
-        return res.json();
-      })
-      .then((data: SystemStatus & { activity_index?: ActivityIndexType }) => {
-        if (data) applyStatusPayload(data);
-      })
-      .catch((err) => {
-        console.warn('Primary status fetch failed, falling back to local route:', err);
-        if (API_BASE) {
-          fetch('/api/status')
-            .then((r) => (r.ok ? r.json() : null))
-            .then((localData: (SystemStatus & { activity_index?: ActivityIndexType }) | null) => {
-              if (localData) applyStatusPayload(localData);
-            })
-            .catch(() => {});
-        }
-      });
+  // The floating header changes height (drill strip, wrapping on narrow screens);
+  // everything over the map starts below it.
+  useEffect(() => {
+    const header = headerRef.current;
+    if (!header) return;
+    const measure = () => setHudTop(Math.round(header.getBoundingClientRect().height) + 28);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
-    fetchRealQuakes();
-    fetchVolcanoes();
-    fetchOceanFeed();
-    fetchStatus();
-    fetchAI();
+    isDrillRef.current = isDrill;
+  }, [isDrill]);
 
-    const interval = setInterval(() => {
+  // ---- Polling ------------------------------------------------------------
+  const markFeed = useCallback((key: FeedKey, ok: boolean, reported?: FeedState) => {
+    setFeedRecords((prev) => ({
+      ...prev,
+      [key]: ok ? { lastOutcome: 'ok', lastOkAt: Date.now(), reported } : { ...prev[key], lastOutcome: 'failed' },
+    }));
+  }, []);
+
+  const fetchRealQuakes = useCallback(() => {
+    fetchJson<RealtimeEarthquakesData>('/api/realtime/earthquakes')
+      .then((raw) => {
+        if (!raw || typeof raw !== 'object') throw new Error('unexpected earthquake payload');
+        // The Go backend serialises a list it has not fetched yet as null.
+        const data: RealtimeEarthquakesData = {
+          ...raw,
+          recent_bmkg: Array.isArray(raw.recent_bmkg) ? raw.recent_bmkg : [],
+          recent_usgs: Array.isArray(raw.recent_usgs) ? raw.recent_usgs : [],
+        };
+        if (!data.latest_bmkg && data.recent_bmkg.length === 0 && data.recent_usgs.length === 0) {
+          throw new Error('empty earthquake payload');
+        }
+        standaloneRef.current = data.provenance !== undefined;
+        setRealQuakes(data);
+        setRealQuakesAt(Date.now());
+        markFeed('bmkg', true, reportedState(data.provenance, 'bmkg_latest', 'bmkg_recent'));
+        markFeed('usgs', true, reportedState(data.provenance, 'usgs'));
+      })
+      .catch(() => {
+        markFeed('bmkg', false);
+        markFeed('usgs', false);
+      });
+  }, [markFeed]);
+
+  const fetchVolcanoes = useCallback(() => {
+    fetchJson<VolcanoEruption[]>('/api/realtime/volcanoes')
+      .then((data) => {
+        if (!Array.isArray(data)) throw new Error('unexpected volcano payload');
+        setVolcanoes(data);
+        const sources = data.map((item) => item.source).filter(Boolean);
+        const reported: FeedState | undefined =
+          sources.length === 0 ? undefined : sources.includes('PVMBG_LIVE') ? 'live' : 'seed';
+        markFeed('pvmbg', true, reported);
+      })
+      .catch(() => markFeed('pvmbg', false));
+  }, [markFeed]);
+
+  const fetchOceanFeed = useCallback(() => {
+    fetchJson<OceanFeedResponse>('/api/realtime/ocean')
+      .then((data) => {
+        if (!data || !Array.isArray(data.stations)) throw new Error('unexpected ocean payload');
+        setOceanFeed(data);
+        markFeed('ioc', true, data.source === 'IOC_LIVE' ? 'live' : 'seed');
+      })
+      .catch(() => markFeed('ioc', false));
+  }, [markFeed]);
+
+  /** A drill's own scenario, echoed by a shared backend, must not surface as a live warning. */
+  const acceptsBackendTsunami = useCallback(
+    () => !isDrillRef.current && Date.now() >= ignoreBackendTsunamiUntilRef.current,
+    []
+  );
+
+  const fetchStatus = useCallback(() => {
+    fetchJson<StatusPayload>('/api/status')
+      .then((data) => {
+        if (!data) throw new Error('empty status payload');
+        setStatus(data);
+        if (data.activity_index) setActivityIndex(data.activity_index);
+        if (data.latest_ai) setAiAnalysis(data.latest_ai);
+        // The Go backend omits an inactive scenario, so absence there is not a clear.
+        // On the standalone path the tsunami statement is latched from BMKG's own text instead.
+        if (data.provenance) setBackendTsunami(null);
+        else if (data.tsunami_scenario?.active && acceptsBackendTsunami()) setBackendTsunami(data.tsunami_scenario);
+        markFeed('weather', true, reportedState(data.provenance, 'open_meteo'));
+      })
+      .catch(() => markFeed('weather', false));
+  }, [markFeed, acceptsBackendTsunami]);
+
+  const fetchAI = useCallback(() => {
+    fetchJson<AIAnalysis>('/api/ai/latest')
+      .then((data) => {
+        if (!data || !data.status) throw new Error('unexpected AI payload');
+        setAiAnalysis(data);
+        markFeed('ai', true, 'live');
+      })
+      .catch(() => markFeed('ai', false));
+  }, [markFeed]);
+
+  useEffect(() => {
+    const poll = () => {
+      setClock(Date.now());
       fetchRealQuakes();
       fetchVolcanoes();
       fetchOceanFeed();
       fetchStatus();
       fetchAI();
-    }, 20000);
-
+    };
+    poll();
+    const interval = setInterval(poll, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [fetchRealQuakes, fetchVolcanoes, fetchOceanFeed, fetchStatus, fetchAI]);
 
-  // SSE Stream Listener
+  // ---- Event stream -------------------------------------------------------
   const connectSSE = useCallback(() => {
     if (sseRetryTimerRef.current) {
       clearTimeout(sseRetryTimerRef.current);
       sseRetryTimerRef.current = null;
     }
 
-    const es = new EventSource(`${API_BASE}/api/stream`);
-    eventSourceRef.current = es;
+    // Sending the last id back lets the server skip the quake it already delivered.
+    const resume = lastEventIdRef.current
+      ? `?lastEventId=${encodeURIComponent(lastEventIdRef.current)}`
+      : '';
+    const source = new EventSource(`${API_BASE}/api/stream${resume}`);
+    eventSourceRef.current = source;
 
-    es.onopen = () => setConnected(true);
-
-    es.addEventListener('all', (e: MessageEvent) => {
+    source.addEventListener('all', (message: MessageEvent) => {
+      if (message.lastEventId) lastEventIdRef.current = message.lastEventId;
       try {
-        const msg = JSON.parse(e.data);
-        const { event: eventType, data } = msg;
-
+        const { event: eventType, data } = JSON.parse(message.data);
         switch (eventType) {
           case 'metrics':
             setStatus(data as SystemStatus);
             break;
           case 'activity_index':
-            setActivityIndex(data as ActivityIndexType);
+            setActivityIndex(data as ActivityIndex);
             break;
           case 'ai_analysis':
-            setAiAnalysis(data as AIAnalysis);
+            // Only the Go backend's stream carries its own analysis; on the standalone path
+            // the panel is fed by the /api/ai/latest poll, which may hold a model's text.
+            if (!standaloneRef.current) setAiAnalysis(data as AIAnalysis);
             break;
           case 'tsunami':
-            setTsunami(data as TsunamiScenario);
+            if (!standaloneRef.current) {
+              const scenario = data as TsunamiScenario;
+              if (!scenario?.active) setBackendTsunami(null);
+              else if (acceptsBackendTsunami()) setBackendTsunami(scenario);
+            }
             break;
           case 'event': {
-            const liveEvent = parseLiveEvent(
-              data as Record<string, unknown>,
-              `evt-${++eventCounter.current}`
-            );
-            setEvents((prev) => [liveEvent, ...prev].slice(0, 50));
-
+            const liveEvent = parseLiveEvent(data as Record<string, unknown>, nextEventId());
+            setEvents((prev) => capEvents([liveEvent, ...prev]));
             if (liveEvent.type === 'SEISMIC') {
               fetchRealQuakes();
               fetchAI();
@@ -792,167 +539,298 @@ export default function Home() {
           }
         }
       } catch {
-        // ignore parse errors
+        // a malformed frame is skipped; the next poll still refreshes everything
       }
     });
 
-    es.onerror = () => {
-      setConnected(false);
-      es.close();
-      // When standalone without external backend URL, wait 15s between bounded SSE reconnects
-      const retryDelayMs = API_BASE ? 2500 : 15000;
-      sseRetryTimerRef.current = setTimeout(connectSSE, retryDelayMs);
+    source.onerror = () => {
+      source.close();
+      // The standalone stream closes itself by design; reconnect slowly there.
+      sseRetryTimerRef.current = setTimeout(connectSSE, API_BASE ? 2500 : 15000);
     };
-  }, [fetchRealQuakes, fetchAI]);
+  }, [fetchRealQuakes, fetchAI, nextEventId, acceptsBackendTsunami]);
 
   useEffect(() => {
     connectSSE();
     return () => {
-      if (sseRetryTimerRef.current) {
-        clearTimeout(sseRetryTimerRef.current);
-        sseRetryTimerRef.current = null;
-      }
+      if (sseRetryTimerRef.current) clearTimeout(sseRetryTimerRef.current);
       eventSourceRef.current?.close();
     };
   }, [connectSSE]);
 
-  const activeScenario = useMemo(
-    () => DRILL_SCENARIOS.find((s) => s.id === selectedScenarioId) ?? DRILL_SCENARIOS[0],
-    [selectedScenarioId]
-  );
+  // ---- BMKG tsunami statement (latched) -----------------------------------
+  // Re-run on every tick so the hold and retire periods apply between polls; what the feed
+  // was seen to carry is stamped with the time the payload arrived, not with the tick.
+  useEffect(() => {
+    if (!realQuakes || realQuakesAt === null) return;
+    setNotice((prev) =>
+      updateTsunamiNotice(prev, realQuakes.latest_bmkg, realQuakes.recent_bmkg, Date.now(), realQuakesAt)
+    );
+  }, [realQuakes, realQuakesAt, clock]);
 
-  const activePhase = useMemo(
-    () => DRILL_PHASES.find((p) => p.phaseNumber === drillPhaseNumber) ?? DRILL_PHASES[3],
-    [drillPhaseNumber]
-  );
+  const noticeInForce = isNoticeInForce(notice);
 
-  const emitDrillEvents = useCallback(
-    (scenario: DrillScenarioPreset, phase: DrillPhasePreset, ts: string) => {
-      const nextEvents: LiveEvent[] = [
-        {
-          id: `drill-evt-${++eventCounter.current}`,
-          type: 'SEISMIC',
-          description: `[DRILL ${phase.shortLabel}] ${scenario.name} — ${scenario.faultZone} (MMI ${phase.mmi.toFixed(1)}, Intensitas ${phase.activityLevel.toFixed(0)}%)`,
-          severity: phase.phaseNumber >= 3 ? 'CRITICAL' : phase.phaseNumber === 2 ? 'HIGH' : 'LOW',
-          timestamp: ts,
-        },
-        {
-          id: `drill-evt-${++eventCounter.current}`,
-          type: 'STATION',
-          description: `[DRILL] Telemetri broadband ${scenario.faultZone} — Energi seismik ${phase.seismicEnergy.toFixed(1)}x baseline`,
-          severity: phase.phaseNumber >= 3 ? 'HIGH' : 'MEDIUM',
-          timestamp: ts,
-        },
-      ];
-
-      if (phase.tsunamiActive) {
-        nextEvents.unshift({
-          id: `drill-evt-${++eventCounter.current}`,
-          type: 'OCEAN',
-          description: `[DRILL TSUNAMI] ${scenario.oceanSensorLabel} mendeteksi anomali muka air laut +${(scenario.tsunamiHeight * phase.tsunamiFactor).toFixed(2)}m (${scenario.affectedZones[0]})`,
-          severity: 'CRITICAL',
-          timestamp: ts,
-        });
-      }
-
-      setEvents((prev) => [...nextEvents, ...prev].slice(0, 60));
+  // ---- Location-based notifications ----------------------------------------
+  // Every delivered alert pops up inside the dashboard, which needs no browser permission;
+  // the desktop notification goes out alongside when the browser allows it. Near-field
+  // earthquakes and eruptions sound the tone (a tsunami statement has its own).
+  const [toasts, setToasts] = useState<LocalAlert[]>([]);
+  const handleLocalAlert = useCallback(
+    (alert: LocalAlert) => {
+      setToasts((previous) => [alert, ...previous.filter((item) => item.id !== alert.id)].slice(0, 4));
+      if (alert.kind !== 'tsunami') playChime('high');
     },
-    []
+    [playChime]
   );
+  const dismissToast = useCallback((id: string) => setToasts((previous) => previous.filter((item) => item.id !== id)), []);
+  const localAlerts = useLocalAlerts({
+    latest: realQuakes?.latest_bmkg ?? null,
+    recent: realQuakes?.recent_bmkg ?? NO_EVENTS,
+    notice,
+    volcanoReports: volcanoes,
+    paused: dashboardMode === 'SIMULASI',
+    onAlert: handleLocalAlert,
+  });
+
+  // ---- Feed health and attention ------------------------------------------
+  const feeds: FeedHealth[] = useMemo(
+    () =>
+      FEED_ORDER.map((key) => ({
+        key,
+        ...FEED_INFO[key],
+        state: clock === null ? 'loading' : feedHealthState(feedRecords[key], clock),
+        lastOkAt: feedRecords[key].lastOkAt,
+        note: key === 'ai' ? aiAnalysis?.model_used : undefined,
+      })),
+    [feedRecords, clock, aiAnalysis?.model_used]
+  );
+
+  const bmkgHealth: QuakeFeedHealth = feeds[0].state;
+
+  const liveAttention = useMemo(
+    () =>
+      assessAttention({
+        latest: realQuakes?.latest_bmkg ?? null,
+        recent: realQuakes?.recent_bmkg ?? [],
+        felt: realQuakes?.felt_bmkg ?? [],
+        feed: bmkgHealth,
+        now: clock ?? 0,
+      }),
+    [realQuakes, bmkgHealth, clock]
+  );
+
+  const weekDays = useMemo(
+    () => summarizeDays(realQuakes?.latest_bmkg ?? null, realQuakes?.recent_bmkg ?? [], clock ?? 0, realQuakes?.felt_bmkg ?? []),
+    [realQuakes, clock]
+  );
+
+  // ---- Drill model --------------------------------------------------------
+  const activeScenario = useMemo(() => findDrillScenario(selectedScenarioId), [selectedScenarioId]);
+  const activePhase = useMemo(() => findDrillPhase(drillPhaseNumber), [drillPhaseNumber]);
+  /** Wall-clock instant of the scenario's mainshock; the drill's "origin time". */
+  const drillOriginIso = useMemo(
+    () => new Date(scenarioOriginMs(activePhase, phaseEnteredAt)).toISOString(),
+    [activePhase, phaseEnteredAt]
+  );
+
+  const enterPhase = useCallback(
+    (scenario: DrillScenario, phase: DrillPhase) => {
+      const now = Date.now();
+      setPhaseEnteredAt(now);
+      const rows = buildDrillEvents(scenario, phase, new Date(now).toISOString(), nextEventId);
+      setEvents((prev) => capEvents([...rows, ...prev]));
+    },
+    [nextEventId]
+  );
+
+  /** Ends the drill on a connected backend and drops whatever scenario it echoed back. */
+  const leaveBackendDrill = useCallback(() => {
+    // The backend takes a moment to stop broadcasting the drill's scenario.
+    ignoreBackendTsunamiUntilRef.current = Date.now() + 15_000;
+    setBackendTsunami(null);
+    toggleBackendMode('real')
+      .then(() => triggerSimulation('reset'))
+      .catch(() => {});
+  }, []);
 
   const handleModeChange = useCallback(
-    (nextMode: 'REAL' | 'SIMULASI') => {
-      setDashboardMode(nextMode);
-      setAlertDismissed(false);
+    (nextMode: DashboardMode) => {
+      if (nextMode === dashboardMode) return;
       if (nextMode === 'SIMULASI') {
-        const nowIso = new Date().toISOString();
-        setDrillActivatedAt(nowIso);
-        emitDrillEvents(activeScenario, activePhase, nowIso);
+        if (noticeInForce) {
+          // A drill must never run over a real warning.
+          setSystemMessage('Simulasi tidak dapat dimulai selama pernyataan tsunami BMKG berlaku.');
+          setCollapsedAlertKey(null);
+          return;
+        }
+        setDashboardMode('SIMULASI');
+        drillToneRef.current = TONE_SILENT;
+        enterPhase(activeScenario, activePhase);
         toggleBackendMode('drill')
           .then(() => triggerSimulation(`scenario/${activeScenario.id}`))
           .catch(() => {});
-      } else {
-        setIsDrillPlaying(false);
-        setTsunami(null);
-        toggleBackendMode('real')
-          .then(() => triggerSimulation('reset'))
-          .catch(() => {});
-        fetchStatus();
-        fetchAI();
-        fetchRealQuakes();
+        return;
       }
+      setDashboardMode('REAL');
+      setIsDrillPlaying(false);
+      leaveBackendDrill();
+      fetchStatus();
+      fetchAI();
+      fetchRealQuakes();
     },
-    [activeScenario, activePhase, emitDrillEvents, fetchStatus, fetchAI, fetchRealQuakes]
+    [
+      dashboardMode,
+      noticeInForce,
+      activeScenario,
+      activePhase,
+      enterPhase,
+      leaveBackendDrill,
+      fetchStatus,
+      fetchAI,
+      fetchRealQuakes,
+    ]
   );
 
   const handleSelectScenario = useCallback(
-    (scenarioId: DrillScenarioPreset['id']) => {
+    (scenarioId: DrillScenarioId) => {
       setSelectedScenarioId(scenarioId);
-      setAlertDismissed(false);
-      const scenario = DRILL_SCENARIOS.find((s) => s.id === scenarioId) ?? DRILL_SCENARIOS[0];
-      const nowIso = new Date().toISOString();
-      setDrillActivatedAt(nowIso);
-      emitDrillEvents(scenario, activePhase, nowIso);
+      const scenario = findDrillScenario(scenarioId);
+      enterPhase(scenario, activePhase);
       triggerSimulation(`scenario/${scenario.id}`).catch(() => {});
     },
-    [activePhase, emitDrillEvents]
+    [activePhase, enterPhase]
   );
 
   const handleSelectPhase = useCallback(
     (phaseNumber: number) => {
       setDrillPhaseNumber(phaseNumber);
-      setAlertDismissed(false);
-      const phase = DRILL_PHASES.find((p) => p.phaseNumber === phaseNumber) ?? DRILL_PHASES[3];
-      const nowIso = new Date().toISOString();
-      setDrillActivatedAt(nowIso);
-      emitDrillEvents(activeScenario, phase, nowIso);
+      enterPhase(activeScenario, findDrillPhase(phaseNumber));
     },
-    [activeScenario, emitDrillEvents]
+    [activeScenario, enterPhase]
   );
 
-  // Auto-advance Megathrust Drill phases every 6 seconds when Play is active
   useEffect(() => {
-    if (dashboardMode !== 'SIMULASI' || !isDrillPlaying) return;
-    const timer = setInterval(() => {
-      const nextPhase = drillPhaseNumber >= 5 ? 1 : drillPhaseNumber + 1;
-      handleSelectPhase(nextPhase);
-    }, 6000);
+    if (!isDrill || !isDrillPlaying) return;
+    const timer = setInterval(
+      () => handleSelectPhase(nextDrillPhaseNumber(drillPhaseNumber)),
+      AUTOPLAY_SECONDS * 1000
+    );
     return () => clearInterval(timer);
-  }, [dashboardMode, isDrillPlaying, drillPhaseNumber, handleSelectPhase]);
+  }, [isDrill, isDrillPlaying, drillPhaseNumber, handleSelectPhase]);
 
-  const handleFocusMap = useCallback((lat: number, lon: number) => {
-    setFocusCoords({ lat, lon });
-    document.getElementById('tactical-map-section')?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'nearest',
-    });
-  }, []);
+  // A real statement arriving mid-drill ends the drill.
+  useEffect(() => {
+    if (!isDrill || !noticeInForce) return;
+    setDashboardMode('REAL');
+    setIsDrillPlaying(false);
+    setCollapsedAlertKey(null);
+    setSystemMessage('Simulasi dihentikan: BMKG menyatakan potensi tsunami untuk gempa nyata.');
+    leaveBackendDrill();
+  }, [isDrill, noticeInForce, leaveBackendDrill]);
 
-  const drillTimestamp = drillActivatedAt || '2026-11-15T12:00:00.000Z';
+  useEffect(() => {
+    if (!systemMessage) return;
+    const timer = setTimeout(() => setSystemMessage(null), 9000);
+    return () => clearTimeout(timer);
+  }, [systemMessage]);
+
+  useEffect(() => {
+    document.title = isDrill ? `[SIMULASI] ${BASE_TITLE}` : BASE_TITLE;
+    return () => {
+      document.title = BASE_TITLE;
+    };
+  }, [isDrill]);
+
+  /** The scenario earthquake, once the mainshock has happened. */
+  const drillQuake: BMKGGempaDetail | null = useMemo(() => {
+    if (!isDrill || !activePhase.mainshockOccurred) return null;
+    return {
+      Tanggal: 'Skenario latihan',
+      Jam: activePhase.shortLabel,
+      DateTime: drillOriginIso,
+      Coordinates: `${activeScenario.lat.toFixed(2)},${activeScenario.lon.toFixed(2)}`,
+      Lintang: `${Math.abs(activeScenario.lat).toFixed(2)} ${activeScenario.lat < 0 ? 'LS' : 'LU'}`,
+      Bujur: `${activeScenario.lon.toFixed(2)} BT`,
+      Magnitude: activeScenario.magnitude.toFixed(1),
+      Kedalaman: `${activeScenario.depth} km`,
+      Wilayah: `${activeScenario.name} — ${activeScenario.faultZone}`,
+      Potensi: '',
+    };
+  }, [isDrill, activePhase, activeScenario, drillOriginIso]);
+
+  /** Scenario tsunami: drives the map overlay and the ocean panel's drill surges. */
+  const drillTsunami: TsunamiScenario | null = useMemo(() => {
+    if (!isDrill || !activePhase.tsunamiActive) return null;
+    return {
+      active: true,
+      detection_time: drillOriginIso,
+      sensor_id: `Sensor skenario — ${activeScenario.oceanSensorLabel}`,
+      wave_anomaly: Number((activeScenario.tsunamiHeight * activePhase.tsunamiFactor).toFixed(2)),
+      affected_zones: activeScenario.affectedZones,
+      response_actions: [],
+      severity: 'CRITICAL',
+      timestamp: drillOriginIso,
+    };
+  }, [isDrill, activePhase, activeScenario, drillOriginIso]);
+
+  const drillStatus: SystemStatus | null = useMemo(() => {
+    if (!isDrill) return null;
+    return {
+      seismic_intensity: activePhase.activityLevel,
+      ocean_status: drillTsunami
+        ? `Lonjakan skenario +${formatDecimal(drillTsunami.wave_anomaly)} m`
+        : 'Tanpa lonjakan pada fase ini',
+      weather_status: activePhase.weatherStatus,
+      infra_status: activePhase.infraStatus,
+      active_alerts: activePhase.activeAlerts,
+      risk_level: activePhase.riskLevel,
+      trend_direction: activePhase.trendDirection,
+      last_update: drillOriginIso,
+    };
+  }, [isDrill, activePhase, drillTsunami, drillOriginIso]);
+
+  const drillActivityIndex: ActivityIndex | null = useMemo(() => {
+    if (!isDrill) return null;
+    return {
+      overall_percentage: activePhase.activityLevel,
+      seismic_change: 0,
+      tremor_change: 0,
+      deformation_trend: activePhase.mainshockOccurred
+        ? `Slip koseismik ${activeScenario.coseismicSlip}`
+        : 'Tidak ada perubahan',
+      thermal_trend: 'tidak tersedia',
+      trend_direction: activePhase.trendDirection,
+      earthquake_count: activePhase.earthquakeCount,
+      avg_magnitude: 0,
+      max_magnitude: activePhase.mainshockOccurred ? activeScenario.magnitude : 0,
+      timestamp: drillOriginIso,
+    };
+  }, [isDrill, activePhase, activeScenario, drillOriginIso]);
 
   const drillMapData: DrillScenarioMapData | null = useMemo(() => {
-    if (dashboardMode !== 'SIMULASI') return null;
+    if (!isDrill) return null;
     return {
       id: activeScenario.id,
       name: activeScenario.name,
       faultZone: activeScenario.faultZone,
-      magnitude: activePhase.phaseNumber >= 3 ? activeScenario.magnitude : Number((activeScenario.magnitude - 2.1).toFixed(1)),
+      magnitude: activeScenario.magnitude,
       depth: activeScenario.depth,
       lat: activeScenario.lat,
       lon: activeScenario.lon,
-      tsunamiHeight: Number((activeScenario.tsunamiHeight * Math.max(0.25, activePhase.tsunamiFactor)).toFixed(1)),
+      tsunamiHeight: activeScenario.tsunamiHeight,
+      waveHeight: Number((activeScenario.tsunamiHeight * Math.max(0.25, activePhase.tsunamiFactor)).toFixed(1)),
     };
-  }, [dashboardMode, activeScenario, activePhase]);
+  }, [isDrill, activeScenario, activePhase]);
 
-  const drillPhaseObj: LifecyclePhase | null = useMemo(() => {
-    if (dashboardMode !== 'SIMULASI') return null;
+  const drillPhaseForMap: LifecyclePhase | null = useMemo(() => {
+    if (!isDrill) return null;
     return {
       phase_number: activePhase.phaseNumber,
       phase_name: activePhase.phaseName,
       phase_title: activePhase.title,
       activity_level: activePhase.activityLevel,
-      duration_sec: 120,
-      elapsed_sec: activePhase.phaseNumber * 24,
+      duration_sec: 0,
+      elapsed_sec: 0,
       seismic_energy: activePhase.seismicEnergy,
       status: activePhase.riskLevel,
       scenario_name: activeScenario.name,
@@ -962,628 +840,690 @@ export default function Home() {
       mmi: activePhase.mmi,
       latitude: activeScenario.lat,
       longitude: activeScenario.lon,
-      timestamp: drillTimestamp,
+      timestamp: drillOriginIso,
     };
-  }, [dashboardMode, activeScenario, activePhase, drillTimestamp]);
+  }, [isDrill, activePhase, activeScenario, drillOriginIso]);
 
-  const effectiveTsunami: TsunamiScenario | null = useMemo(() => {
-    if (dashboardMode !== 'SIMULASI') {
-      return tsunami;
-    }
-    const waveHeight = Number((activeScenario.tsunamiHeight * activePhase.tsunamiFactor).toFixed(2));
-    return {
-      active: activePhase.tsunamiActive,
-      detection_time: drillTimestamp,
-      sensor_id: activeScenario.sensorId,
-      wave_anomaly: waveHeight > 0 ? waveHeight : 0.15,
-      affected_zones: activeScenario.affectedZones,
-      response_actions: [
-        `Aktivasi sirine tsunami pesisir ${activeScenario.affectedZones[0]} & ${activeScenario.affectedZones[1]}`,
-        `Evakuasi vertikal/menjauhi pantai >20 m (jendela evakuasi ${activeScenario.evacuationWindowMin} menit)`,
-        `Koordinasi operasi SAR terpadu BMKG, BNPB, BASARNAS, dan TNI/Polri`,
-      ],
-      severity: activePhase.phaseNumber >= 3 ? 'CRITICAL' : 'HIGH',
-      timestamp: drillTimestamp,
-    };
-  }, [dashboardMode, tsunami, activeScenario, activePhase, drillTimestamp]);
-
-  const effectiveActivityIndex: ActivityIndexType | null = useMemo(() => {
-    if (dashboardMode !== 'SIMULASI') {
-      return activityIndex;
-    }
-    const effectiveMag =
-      activePhase.phaseNumber >= 3
-        ? activeScenario.magnitude
-        : activePhase.phaseNumber === 2
-        ? Number((activeScenario.magnitude - 2.3).toFixed(1))
-        : 4.1;
-    return {
-      overall_percentage: activePhase.activityLevel,
-      seismic_change: Number((activePhase.seismicEnergy * 24).toFixed(1)),
-      tremor_change: Number((activePhase.seismicEnergy * 18.5).toFixed(1)),
-      deformation_trend: activePhase.phaseNumber >= 3 ? `COSEISMIC SLIP ${activeScenario.coseismicSlip}` : 'INCREASING GPS STRAIN',
-      thermal_trend: activePhase.phaseNumber >= 3 ? 'HIGH ENERGY RELEASE' : 'STABLE',
-      trend_direction: activePhase.trendDirection,
-      earthquake_count: activePhase.earthquakeCount,
-      avg_magnitude: Number((effectiveMag - 1.4).toFixed(1)),
-      max_magnitude: effectiveMag,
-      timestamp: drillTimestamp,
-    };
-  }, [dashboardMode, activityIndex, activeScenario, activePhase, drillTimestamp]);
-
-  const effectiveStatus: SystemStatus | null = useMemo(() => {
-    if (dashboardMode !== 'SIMULASI') {
-      return status;
-    }
-    return {
-      seismic_intensity: activePhase.activityLevel,
-      ocean_status: activePhase.tsunamiActive
-        ? `TSUNAMI SURGE +${(activeScenario.tsunamiHeight * activePhase.tsunamiFactor).toFixed(1)}m`
-        : 'IOC BUOY MONITORING',
-      weather_status: activePhase.weatherStatus,
-      infra_status: activePhase.infraStatus,
-      active_alerts: activePhase.activeAlerts,
-      risk_level: activePhase.riskLevel,
-      trend_direction: activePhase.trendDirection,
-      last_update: drillTimestamp,
-      tsunami_scenario: effectiveTsunami ?? undefined,
-    };
-  }, [dashboardMode, status, activeScenario, activePhase, drillTimestamp, effectiveTsunami]);
-
-  const effectiveAiAnalysis: AIAnalysis | null = useMemo(() => {
-    if (dashboardMode !== 'SIMULASI') {
-      return aiAnalysis;
-    }
-    const simulatedWave = (activeScenario.tsunamiHeight * activePhase.tsunamiFactor).toFixed(1);
-    return {
-      status: activePhase.riskLevel === 'CRITICAL' ? 'CRITICAL' : activePhase.riskLevel === 'HIGH' ? 'HIGH' : 'ADVISORY',
-      threat_summary: `[SIMULASI ${activePhase.shortLabel}] ${activeScenario.name} — ${activePhase.title}. Estimasi anomali gelombang ${activePhase.tsunamiActive ? `+${simulatedWave} m` : 'dalam pemantauan precursor'} menuju ${activeScenario.affectedZones.slice(0, 3).join(', ')}.`,
-      observations: [
-        `Pemicu skenario: ${activeScenario.name} di ${activeScenario.faultZone} (${activeScenario.lat.toFixed(2)}, ${activeScenario.lon.toFixed(2)}) kedalaman ${activeScenario.depth} km.`,
-        `Fase siklus hidup bencana: ${activePhase.title} (MMI ${activePhase.mmi.toFixed(1)}, aktivitas Flink CEP ${activePhase.activityLevel.toFixed(0)}%).`,
-        activePhase.tsunamiActive
-          ? `${activeScenario.oceanSensorLabel} mengonfirmasi anomali muka air laut hingga +${simulatedWave} m pada zona berdampak.`
-          : `Stasiun GPS/InSAR dan seismometer broadband mengamati akumulasi regangan pra-gempa pada segmen subduksi.`,
-      ],
-      assessment: `Analisis streaming Flink CEP + OODA Sentinel pada skenario ${activeScenario.name} (${activePhase.shortLabel}) menunjukkan potensi pelepasan energi skala besar melalui mekanisme ${activeScenario.faultMechanism}. Zona prioritas dampak meliputi ${activeScenario.affectedZones.join(', ')}.`,
-      recommendations: [
-        `Kirim peringatan dini PD-1/PD-2/PD-3 InaTEWS ke Pemda dan BPBD pada sektor ${activeScenario.affectedZones.slice(0, 3).join(', ')}.`,
-        `Arahkan warga pesisir menuju zona elevasi aman (>20 m) dalam jendela emas ${activeScenario.evacuationWindowMin} menit.`,
-        `Verifikasi berkelanjutan pembacaan stasiun pasut IOC UNESCO dan DART Buoy ${activeScenario.sensorId}.`,
-      ],
-      agency_actions: [
-        {
-          agency: 'BMKG InaTEWS',
-          priority: activePhase.phaseNumber >= 3 ? 'CRITICAL' : 'HIGH',
-          action: `Diseminasi parameter ${activeScenario.name} & pemutakhiran peringatan tsunami ke seluruh portal WRS.`,
-        },
-        {
-          agency: 'BNPB / BPBD',
-          priority: activePhase.phaseNumber >= 3 ? 'CRITICAL' : 'MEDIUM',
-          action: `Aktivasi posko komando darurat dan jalur evakuasi ${activeScenario.affectedZones[0]} - ${activeScenario.affectedZones[1]}.`,
-        },
-        {
-          agency: 'BASARNAS',
-          priority: activePhase.phaseNumber >= 4 ? 'CRITICAL' : 'HIGH',
-          action: `Mobilisasi USAR, helikopter, dan kapal SAR menuju sektor pesisir terdekat episenter.`,
-        },
-      ],
-      hazard_details: {
-        fault_mechanism: activeScenario.faultMechanism,
-        estimated_coseismic_slip: activeScenario.coseismicSlip,
-        aftershock_risk: activePhase.phaseNumber >= 3 ? 'Sangat Tinggi (berpotensi M6.5+ hingga 72 jam)' : 'Meningkat (Swarm Awal)',
-        tsunami_runup_estimate: activePhase.tsunamiActive ? `Hingga ${activeScenario.tsunamiHeight.toFixed(1)} m di pesisir dekat sumber` : 'Belum terpicu (Fase Pra-Rupture)',
-        evacuation_window_min: activeScenario.evacuationWindowMin,
-      },
-      confidence: activePhase.phaseNumber >= 3 ? 0.96 : 0.88,
-      latency_ms: 420,
-      model_used: aiAnalysis?.model_used || 'InaTEWS Drill AI Engine',
-      disclaimer: 'Mode SIMULASI LATIHAN MEGATHRUST aktif — seluruh data bersifat skenario uji kesiapsiagaan.',
-      contributing_factors: [
-        {
-          indicator: 'Magnitudo & Kedalaman',
-          value: `M${activeScenario.magnitude.toFixed(1)} / ${activeScenario.depth} km`,
-          change: activePhase.shortLabel,
-          significance: activePhase.phaseNumber >= 3 ? 0.98 : 0.65,
-        },
-        {
-          indicator: 'Elevasi Anomali Buoy/IOC',
-          value: activePhase.tsunamiActive ? `+${simulatedWave} m` : '0.05 m',
-          change: activePhase.tsunamiActive ? 'TSUNAMI SURGE' : 'NOMINAL',
-          significance: activePhase.tsunamiActive ? 0.95 : 0.25,
-        },
-        {
-          indicator: 'Indeks Flink CEP MMI',
-          value: `${activePhase.activityLevel.toFixed(0)}% (MMI ${activePhase.mmi.toFixed(1)})`,
-          change: activePhase.trendDirection,
-          significance: Number((activePhase.activityLevel / 100).toFixed(2)),
-        },
-      ],
-      timestamp: drillTimestamp,
-    };
-  }, [dashboardMode, aiAnalysis, activeScenario, activePhase, drillTimestamp]);
-
-  const effectiveLatestQuake: BMKGGempaDetail | null = useMemo(() => {
-    if (dashboardMode !== 'SIMULASI') {
-      return realQuakes?.latest_bmkg ?? null;
-    }
-    const simMag = activePhase.phaseNumber >= 3 ? activeScenario.magnitude : Number((activeScenario.magnitude - 2.3).toFixed(1));
-    return {
-      Tanggal: 'SIMULASI DRILL',
-      Jam: activePhase.shortLabel,
-      DateTime: drillTimestamp,
-      Coordinates: `${activeScenario.lat.toFixed(2)},${activeScenario.lon.toFixed(2)}`,
-      Lintang: `${Math.abs(activeScenario.lat).toFixed(2)} ${activeScenario.lat < 0 ? 'LS' : 'LU'}`,
-      Bujur: `${activeScenario.lon.toFixed(2)} BT`,
-      Magnitude: simMag.toFixed(1),
-      Kedalaman: `${activeScenario.depth} km`,
-      Wilayah: `${activeScenario.name} — ${activeScenario.faultZone}`,
-      Potensi: activePhase.tsunamiActive
-        ? `Berpotensi TSUNAMI (Maks ${activeScenario.tsunamiHeight.toFixed(1)}m) — Skenario Drill InaTEWS`
-        : 'Pemantauan deformasi & precursor swarm (belum memicu tsunami)',
-      Dirasakan: `VIII-IX MMI (${activeScenario.affectedZones[0]})`,
-      Shakemap: realQuakes?.latest_bmkg?.Shakemap,
-    };
-  }, [dashboardMode, realQuakes, activeScenario, activePhase, drillTimestamp]);
-
-  const effectiveActivityLevel =
-    effectiveActivityIndex?.overall_percentage ??
-    effectiveStatus?.seismic_intensity ??
-    15.0;
-
-  const effectiveTrend = effectiveActivityIndex?.trend_direction ?? effectiveStatus?.trend_direction ?? 'STABLE';
-  const effectiveRiskLevel = effectiveStatus?.risk_level ?? 'NORMAL';
-  const effectiveAlertCount = (effectiveTsunami?.active ? 1 : 0) + (effectiveStatus?.active_alerts ?? 0);
-  const effectiveSeismicEnergy = dashboardMode === 'SIMULASI' ? activePhase.seismicEnergy : 1.2;
+  // ---- What each surface shows --------------------------------------------
+  const shownQuake = isDrill ? drillQuake : (realQuakes?.latest_bmkg ?? null);
+  const shownStatus = isDrill ? drillStatus : status;
+  const shownActivityIndex = isDrill ? drillActivityIndex : activityIndex;
 
   const telemetryContext: TelemetryPromptContext = useMemo(
     () => ({
       mode: dashboardMode,
-      scenario:
-        dashboardMode === 'SIMULASI'
-          ? {
-              id: activeScenario.id,
-              name: activeScenario.name,
-              faultZone: activeScenario.faultZone,
-              magnitude: activeScenario.magnitude,
-              depth: activeScenario.depth,
-              tsunamiHeight: activeScenario.tsunamiHeight,
-              affectedZones: activeScenario.affectedZones,
-              evacuationWindowMin: activeScenario.evacuationWindowMin,
-            }
-          : null,
-      phase:
-        dashboardMode === 'SIMULASI'
-          ? {
-              phaseNumber: activePhase.phaseNumber,
-              phaseName: activePhase.phaseName,
-              shortLabel: activePhase.shortLabel,
-              title: activePhase.title,
-              mmi: activePhase.mmi,
-              activityLevel: activePhase.activityLevel,
-              tsunamiActive: activePhase.tsunamiActive,
-            }
-          : null,
-      latestQuake: effectiveLatestQuake,
-      oceanSummary: effectiveStatus?.ocean_status || (oceanFeed?.live_count ? `${oceanFeed.live_count} IOC Live` : undefined),
+      scenario: isDrill
+        ? {
+            id: activeScenario.id,
+            name: activeScenario.name,
+            faultZone: activeScenario.faultZone,
+            magnitude: activeScenario.magnitude,
+            depth: activeScenario.depth,
+            tsunamiHeight: activeScenario.tsunamiHeight,
+            affectedZones: activeScenario.affectedZones,
+            evacuationWindowMin: activeScenario.evacuationWindowMin,
+          }
+        : null,
+      phase: isDrill
+        ? {
+            phaseNumber: activePhase.phaseNumber,
+            phaseName: activePhase.phaseName,
+            shortLabel: activePhase.shortLabel,
+            title: activePhase.title,
+            mmi: activePhase.mmi,
+            activityLevel: activePhase.activityLevel,
+            tsunamiActive: activePhase.tsunamiActive,
+            tsunamiFactor: activePhase.tsunamiFactor,
+            bulletin: activePhase.bulletin,
+          }
+        : null,
+      latestQuake: shownQuake,
     }),
-    [dashboardMode, activeScenario, activePhase, effectiveLatestQuake, effectiveStatus, oceanFeed]
+    [dashboardMode, isDrill, activeScenario, activePhase, shownQuake]
   );
 
-  useEffect(() => {
-    if (effectiveTsunami?.active || effectiveRiskLevel === 'CRITICAL') {
-      playChime('critical');
-    } else if (effectiveRiskLevel === 'HIGH') {
-      playChime('high');
-    }
-  }, [
-    effectiveTsunami?.active,
-    effectiveRiskLevel,
-    selectedScenarioId,
-    drillPhaseNumber,
-    dashboardMode,
-    playChime,
-  ]);
+  const shownAiAnalysis = useMemo(
+    () => (isDrill ? (buildDrillAIAnalysis({ context: telemetryContext }) ?? aiAnalysis) : aiAnalysis),
+    [isDrill, telemetryContext, aiAnalysis]
+  );
 
-  const showTsunamiAlert = Boolean(effectiveTsunami?.active && !alertDismissed);
-  const tideCount = oceanFeed?.count ?? 20;
+  const mastheadStatus: MastheadStatus = useMemo(() => {
+    if (isDrill) {
+      const headline = `${activeScenario.shortLabel} · fase ${activePhase.shortLabel}`;
+      if (activePhase.tsunamiActive) {
+        const lead = warningLeadMin(activeScenario);
+        return {
+          kind: 'tsunami',
+          tone: 'kritis',
+          label: 'Simulasi · tsunami (latihan)',
+          shortLabel: 'Simulasi',
+          headline,
+          reasons: [
+            activePhase.title,
+            lead > 0
+              ? `Jeda PD-1 ke gelombang pertama pada skenario ini: ±${lead} menit.`
+              : 'Pada skenario ini peringatan resmi tidak sempat mendahului gelombang pertama.',
+          ],
+        };
+      }
+      const tone: Tone = activePhase.attention;
+      return {
+        kind: 'attention',
+        tone,
+        label: `Simulasi · ${TONE_LABEL[tone]}`,
+        shortLabel: 'Simulasi',
+        headline,
+        reasons: [activePhase.title],
+      };
+    }
+
+    if (notice && noticeInForce) {
+      const magnitude = parseFloat(notice.quake.Magnitude);
+      return {
+        kind: 'tsunami',
+        tone: 'kritis',
+        label: 'BMKG: berpotensi tsunami',
+        shortLabel: 'Tsunami · BMKG',
+        headline: `${Number.isFinite(magnitude) ? `M${formatDecimal(magnitude)} · ` : ''}${shortRegion(notice.quake.Wilayah, 30)}`,
+        reasons: [
+          `Keterangan BMKG: “${notice.statement}”`,
+          notice.status === 'unconfirmed'
+            ? 'Umpan publik sudah berganti ke gempa lain; status terkini hanya ada di BMKG.'
+            : `Terakhir terlihat pada umpan BMKG pukul ${formatWibTime(notice.lastSeenMs, { seconds: false })}.`,
+        ],
+        sinceMs: notice.originMs,
+      };
+    }
+
+    const { driver } = liveAttention;
+    return {
+      kind: 'attention',
+      tone: liveAttention.level,
+      label: `Pantauan · ${TONE_LABEL[liveAttention.level]}`,
+      shortLabel: TONE_LABEL[liveAttention.level],
+      headline: liveAttention.headline,
+      // The headline ends with the event's age; announcing that would repeat every minute.
+      announcement: driver
+        ? `M${formatDecimal(driver.magnitude)} · ${shortRegion(driver.region, 30)}`
+        : liveAttention.headline,
+      reasons: liveAttention.reasons,
+      expiresAtMs: liveAttention.expiresAtMs,
+      attention: liveAttention,
+    };
+  }, [isDrill, activeScenario, activePhase, notice, noticeInForce, liveAttention]);
+
+  // ---- Warning card -------------------------------------------------------
+  const alertKey = isDrill
+    ? activePhase.tsunamiActive
+      ? `drill:${activeScenario.id}`
+      : null
+    : notice
+      ? `bmkg:${notice.key}`
+      : backendTsunami?.active
+        ? `backend:${backendTsunami.detection_time}`
+        : null;
+  const alertCollapsed = alertKey !== null && collapsedAlertKey === alertKey;
+  const toggleAlertCollapsed = useCallback(
+    () => setCollapsedAlertKey((prev) => (prev === alertKey ? null : alertKey)),
+    [alertKey]
+  );
+
+  // On a phone the expanded card would cover the map, so a new warning starts as its
+  // one-line header (level and time) and opens on tap.
+  useEffect(() => {
+    if (isDesktop === false && alertKey) setCollapsedAlertKey(alertKey);
+  }, [isDesktop, alertKey]);
+
+  const warningCard = isDrill ? (
+    activePhase.tsunamiActive ? (
+      <DrillTsunamiCard
+        scenario={activeScenario}
+        phase={activePhase}
+        phaseEnteredAtMs={phaseEnteredAt}
+        collapsed={alertCollapsed}
+        onToggleCollapsed={toggleAlertCollapsed}
+      />
+    ) : null
+  ) : notice ? (
+    <BmkgTsunamiCard
+      notice={notice}
+      feedState={bmkgHealth}
+      collapsed={alertCollapsed}
+      onToggleCollapsed={toggleAlertCollapsed}
+      onAcknowledge={() => {
+        setNotice((prev) => (prev ? acknowledgeNotice(prev) : prev));
+        setCollapsedAlertKey(alertKey);
+      }}
+    />
+  ) : backendTsunami?.active ? (
+    <BackendTsunamiCard
+      scenario={backendTsunami}
+      collapsed={alertCollapsed}
+      onToggleCollapsed={toggleAlertCollapsed}
+    />
+  ) : null;
+
+  // One tone per escalation, never per poll or per tick (see lib/alertTone).
+  const tone: ToneSituation = isDrill
+    ? {
+        known: true,
+        rank: activePhase.tsunamiActive ? 2 : activePhase.attention === 'tinggi' ? 1 : 0,
+        identity: `drill:${activeScenario.id}:${activePhase.phaseNumber}`,
+        eventMs: 0,
+      }
+    : notice && noticeInForce
+      ? { known: true, rank: 2, identity: `notice:${notice.key}`, eventMs: 0 }
+      : {
+          known: liveAttention.level !== 'unknown',
+          rank: liveAttention.level === 'tinggi' ? 1 : 0,
+          identity: 'attention',
+          eventMs: liveAttention.newestDriverMs ?? 0,
+        };
+  const { known: toneKnown, rank: toneRank, identity: toneIdentity, eventMs: toneEventMs } = tone;
+  useEffect(() => {
+    const memoryRef = toneIdentity.startsWith('drill:') ? drillToneRef : liveToneRef;
+    const { play, memory } = advanceTone(memoryRef.current, {
+      known: toneKnown,
+      rank: toneRank,
+      identity: toneIdentity,
+      eventMs: toneEventMs,
+    });
+    memoryRef.current = memory;
+    if (play) playChime(toneRank >= 2 ? 'critical' : 'high');
+  }, [toneKnown, toneRank, toneIdentity, toneEventMs, playChime]);
+
+  // ---- Handlers passed down (stable, so the map does not rebuild markers) --
+  const handleFocusMap = useCallback((lat: number, lon: number) => {
+    setFocusCoords({ lat, lon });
+  }, []);
+  /** Brings up one topic in the panel on the map — the inspector on a desktop, the sheet below `lg`. */
+  const openPanel = useCallback((id: PanelId) => {
+    setInspectorTab(id);
+    setShowHudInspector(true);
+    setSheetOpen(true);
+  }, []);
+  // Picking a volcano anywhere — a map marker, a chip — brings up one panel on the map with
+  // its picture, eruption report, live seismogram and analysis.
+  const handleSelectVolcano = useCallback(
+    (name: string) => {
+      setSelectedVolcano(name);
+      setAnalysisFor(null);
+      if (name === 'BMKG_REGIONAL') return;
+      setHubVolcano(name);
+      openPanel('gunung');
+    },
+    [openPanel]
+  );
+  // "Analisis PVMBG" on a chip: the same panel, opened at its analysis section.
+  const handleAnalyzeVolcano = useCallback(
+    (name: string) => {
+      handleSelectVolcano(name);
+      analysisNonceRef.current += 1;
+      setAnalysisFor({ name, nonce: analysisNonceRef.current });
+    },
+    [handleSelectVolcano]
+  );
+  const handleCloseSheet = useCallback(() => setSheetOpen(false), []);
+  // Once the panel has opened the analysis and brought it into view, the request is spent;
+  // otherwise it would replay every time the card mounts again (a tab switch, a warning card).
+  const handleAnalysisHandled = useCallback(() => setAnalysisFor(null), []);
+  // The sheet is measured while it is on screen; React 19 runs the returned cleanup on detach.
+  const sheetRef = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return;
+    const observer = new ResizeObserver(() => setSheetHeight(Math.round(node.getBoundingClientRect().height)));
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      setSheetHeight(0);
+    };
+  }, []);
+  const handleOpenSources = useCallback(() => openPanel('sumber'), [openPanel]);
+  const handleOpenAlerts = useCallback(() => openPanel('notifikasi'), [openPanel]);
+  // A pop-up's "Lihat di peta": an eruption opens its volcano's panel, anything else is flown to.
+  const handleShowAlertOnMap = useCallback(
+    (alert: LocalAlert) => {
+      if (alert.kind === 'volcano' && alert.volcanoName) handleSelectVolcano(alert.volcanoName);
+      else if (alert.point) handleFocusMap(alert.point.lat, alert.point.lon);
+      dismissToast(alert.id);
+    },
+    [handleSelectVolcano, handleFocusMap, dismissToast]
+  );
+
+  const seismographProps = {
+    seismicEnergy: isDrill ? activePhase.seismicEnergy : 1.2,
+    activityLevel: isDrill ? activePhase.activityLevel : 15,
+    phaseName: isDrill ? activePhase.phaseName : 'KONDISI_LATAR',
+    volcanoes,
+    selectedVolcano,
+    onSelectVolcano: handleSelectVolcano,
+    onAnalyzeVolcano: handleAnalyzeVolcano,
+    isSimulasi: isDrill,
+    theme,
+  };
+
+  const quakeCard = (
+    <LatestQuakeCard
+      quake={shownQuake}
+      realQuakes={realQuakes}
+      onFocusMap={handleFocusMap}
+      isDrill={isDrill}
+      feedState={bmkgHealth}
+    />
+  );
+
+  const telemetryCard = (
+    <div className="glass-hud flex flex-col gap-4 rounded-2xl p-4">
+      {isDrill ? (
+        <div className="rounded-xl border border-[var(--drill-border)] bg-[var(--drill-bg)] p-3">
+          <p className="t-micro text-[var(--drill)]">Skenario latihan</p>
+          <p className="t-heading mt-1">{activeScenario.name}</p>
+          <p className="t-meta mt-1">{activePhase.title}</p>
+        </div>
+      ) : (
+        <ActivityStrip days={weekDays} assessment={liveAttention} />
+      )}
+      <MetricCards
+        bare={true}
+        isSimulasi={isDrill}
+        fromBackend={!isDrill && status !== null && status.provenance === undefined}
+        oceanStatus={shownStatus?.ocean_status ?? null}
+        weatherStatus={shownStatus?.weather_status ?? null}
+        infraStatus={isDrill ? shownStatus?.infra_status : undefined}
+        activityIndex={shownActivityIndex}
+      />
+      <EventStream bare={true} events={events} maxHeightClass="max-h-[320px]" />
+    </div>
+  );
+
+  // The pill row starts at the map's left edge, so Leaflet's own controls sit below it —
+  // and, on a phone, below a collapsed warning header too.
+  const controlsOffset = 44 + (isDesktop === false && warningCard && alertCollapsed ? 58 : 0);
+  // Written on <html>, not on this page's root: `scroll-padding-top` is resolved there, and
+  // a custom property set further down the tree never reaches it.
+  useEffect(() => {
+    if (hudTop === null) return;
+    const root = document.documentElement;
+    root.style.setProperty('--hud-top', `${hudTop}px`);
+    root.style.setProperty('--map-controls-top', `${hudTop + controlsOffset}px`);
+  }, [hudTop, controlsOffset]);
+  useEffect(
+    () => () => {
+      const root = document.documentElement;
+      root.style.removeProperty('--hud-top');
+      root.style.removeProperty('--map-controls-top');
+    },
+    []
+  );
+
+  // What the HUD covers of the map, so the overview, fly-to targets and popups use the part left open.
+  const rightColumnShown = isDesktop !== false && (showHudInspector || warningCard !== null);
+  // A warning card is read first: while it is open below `lg`, the sheet steps aside
+  // (it comes back when the card is collapsed).
+  const sheetShown = isDesktop === false && sheetOpen && !(warningCard !== null && !alertCollapsed);
+  const sheetIsSide = isWide === true;
+  const mapInsets: MapViewInsets = useMemo(
+    () => ({
+      top: (hudTop ?? 84) + controlsOffset,
+      // Beside the map: the inspector column, or the side panel from `sm` up.
+      right: rightColumnShown || (sheetShown && sheetIsSide) ? 396 : 0,
+      // Below `lg` the dock runs along the bottom edge, and on a phone the sheet sits above it.
+      bottom:
+        isDesktop === false
+          ? sheetShown && !sheetIsSide && sheetHeight > 0
+            ? sheetHeight + DOCK_CLEARANCE + 12
+            : DOCK_CLEARANCE
+          : 0,
+    }),
+    [hudTop, controlsOffset, rightColumnShown, sheetShown, sheetIsSide, sheetHeight, isDesktop]
+  );
+  const volcanoListState = feeds.find((feed) => feed.key === 'pvmbg')?.state ?? 'loading';
+  const analysisRequest = analysisFor !== null && analysisFor.name === hubVolcano ? analysisFor.nonce : 0;
+
+  const panelIcon = (id: PanelId, Icon: LucideIcon): LucideIcon =>
+    id === 'notifikasi' && localAlerts.settings.enabled ? BellRing : Icon;
+
+  // Below `lg` a dock icon opens its topic, or closes it when it is already up. An open warning
+  // card folds to its header first, so the panel asked for does not stay hidden behind it.
+  const handleDockSelect = (id: PanelId) => {
+    if (sheetShown && inspectorTab === id) {
+      setSheetOpen(false);
+      return;
+    }
+    if (warningCard !== null && !alertCollapsed) setCollapsedAlertKey(alertKey);
+    setAnalysisFor(null);
+    openPanel(id);
+  };
+
+  /** One topic of the panel. `inSheet`: the layout below `lg`, where the seismograph strip heads the volcano panel. */
+  const renderPanel = (id: PanelId, inSheet: boolean) => {
+    switch (id) {
+      case 'gempa':
+        return quakeCard;
+      case 'telemetri':
+        return telemetryCard;
+      case 'gunung':
+        return (
+          <div className="flex flex-col gap-2">
+            {inSheet && <Seismograph {...seismographProps} compactHud={true} />}
+            <VolcanoDetailCard
+              key={hubVolcano}
+              volcanoName={hubVolcano}
+              volcanoes={volcanoes}
+              listState={volcanoListState}
+              analysisRequest={analysisRequest}
+              onAnalysisHandled={handleAnalysisHandled}
+            />
+          </div>
+        );
+      case 'analisis':
+        return shownAiAnalysis ? (
+          <AIPanel analysis={shownAiAnalysis} telemetryContext={telemetryContext} />
+        ) : (
+          <div className="glass-hud t-body rounded-2xl p-6 text-center text-[var(--text-muted)]">
+            Memuat ringkasan situasi…
+          </div>
+        );
+      case 'pasut':
+        return (
+          <OceanPanel
+            tsunami={drillTsunami}
+            stations={oceanFeed?.stations}
+            oceanSource={oceanFeed?.source}
+            onFocusMap={handleFocusMap}
+            isSimulasi={isDrill}
+            levelKind={oceanFeed?.level_kind ?? 'reference'}
+          />
+        );
+      case 'notifikasi':
+        return <LocalAlertsPanel alerts={localAlerts} isDrill={isDrill} />;
+      case 'sumber':
+        return (
+          <div className="flex flex-col gap-2">
+            <SourcePanel feeds={feeds} />
+            <section className="matte-card p-4">
+              <button
+                type="button"
+                onClick={() => setShowInfraArchitecture((prev) => !prev)}
+                aria-expanded={showInfraArchitecture}
+                className="flex w-full items-start gap-3 text-left"
+              >
+                <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-2)] text-[var(--accent)]">
+                  <Cpu className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="t-heading block">Arsitektur streaming (referensi)</span>
+                  <span className="t-meta mt-0.5 block text-[var(--text-muted)]">
+                    Confluent Kafka · Apache Flink · Schema Registry — angka ilustratif kecuali backend tersambung
+                  </span>
+                </span>
+                <ChevronDown
+                  className={`mt-1 h-4 w-4 shrink-0 text-[var(--text-secondary)] transition-transform ${
+                    showInfraArchitecture ? 'rotate-180' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+              {showInfraArchitecture && (
+                <div className="mt-4 space-y-4 border-t border-[var(--border-hairline)] pt-4">
+                  <FlinkPanel activityIndex={shownActivityIndex} status={shownStatus} isSimulasi={isDrill} />
+                  <GovernanceView />
+                </div>
+              )}
+            </section>
+          </div>
+        );
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-[var(--surface-canvas)] text-[var(--text-primary)]">
-      {/* Floating Atmospheric Frosted Glass Masthead */}
-      <header className="fixed inset-x-3 top-3 z-[1000] sm:inset-x-5">
+    <div
+      data-mode={isDrill ? 'simulasi' : 'live'}
+      className="min-h-screen bg-[var(--surface-canvas)] text-[var(--text-primary)]"
+    >
+      {/* The fade behind the header keeps busy map colour from showing through the gaps around it */}
+      <header
+        ref={headerRef}
+        className="fixed inset-x-3 top-3 z-[1000] space-y-2 before:pointer-events-none before:absolute before:-inset-x-5 before:-top-3 before:-bottom-5 before:-z-10 before:bg-gradient-to-b before:from-[var(--surface-canvas)] before:to-transparent sm:inset-x-5"
+      >
         <StatusBar
-          connected={connected}
-          alertCount={effectiveAlertCount}
-          riskLevel={effectiveRiskLevel}
-          dashboardMode={dashboardMode}
+          mode={dashboardMode}
           onModeChange={handleModeChange}
+          status={mastheadStatus}
+          feeds={feeds}
           theme={theme}
           onToggleTheme={handleToggleTheme}
           isAudioMuted={isAudioMuted}
           onToggleAudio={() => setIsAudioMuted((prev) => !prev)}
+          onOpenSources={handleOpenSources}
+          alertsEnabled={localAlerts.settings.enabled}
+          onOpenAlerts={handleOpenAlerts}
         />
+        {isDrill && (
+          <DrillStrip
+            scenarios={DRILL_SCENARIOS}
+            phases={DRILL_PHASES}
+            activeScenario={activeScenario}
+            activePhase={activePhase}
+            phaseEnteredAtMs={phaseEnteredAt}
+            isPlaying={isDrillPlaying}
+            autoplaySeconds={AUTOPLAY_SECONDS}
+            onSelectScenario={handleSelectScenario}
+            onSelectPhase={handleSelectPhase}
+            onTogglePlay={() => setIsDrillPlaying((prev) => !prev)}
+            onExit={() => handleModeChange('REAL')}
+          />
+        )}
+        {systemMessage && (
+          <p role="status" className="hud-solid t-body mx-auto max-w-[1600px] rounded-xl px-3.5 py-2 font-semibold">
+            {systemMessage}
+          </p>
+        )}
       </header>
 
-      {/* STAGE 1: FULL-BLEED 100VH ATMOSPHERIC MAP CANVAS + FLOATING FROSTED GLASS HUD */}
+      {/* Map stage with its floating HUD: everything the dashboard shows is on the map */}
       <section
         id="tactical-map-section"
-        className="relative h-[68dvh] min-h-[460px] w-full overflow-hidden lg:h-[100dvh]"
+        aria-label="Peta pemantauan"
+        data-map-sheet={sheetShown ? '' : undefined}
+        className="relative h-[100dvh] min-h-[480px] w-full overflow-hidden"
       >
         <MapComponent
           realQuakes={realQuakes}
           focusCoords={focusCoords}
-          activityLevel={effectiveActivityLevel}
           events={events}
           volcanoes={volcanoes}
           selectedVolcano={selectedVolcano}
-          onSelectVolcano={(name) => setSelectedVolcano(name)}
-          onInspectVolcanoSeismogram={(v) => setInspectingSeismogram(v)}
-          tsunamiActive={Boolean(effectiveTsunami?.active)}
-          isSimulasi={dashboardMode === 'SIMULASI'}
-          phase={drillPhaseObj}
+          onSelectVolcano={handleSelectVolcano}
+          tsunamiActive={isDrill && activePhase.tsunamiActive}
+          isSimulasi={isDrill}
+          phase={drillPhaseForMap}
           drillScenarioData={drillMapData}
+          emphasizeLatest={!isDrill && (noticeInForce || liveAttention.level === 'meningkat' || liveAttention.level === 'tinggi')}
           theme={theme}
           floatingHud={true}
+          viewInsets={mapInsets}
         />
 
-        {/* Floating Top-Left Telemetry Pills + Alerts (Clear of Leaflet TopLeft & Floating Masthead) */}
+        {/* Top-left: one row of facts; on small screens the warning card sits here too */}
         <div
-          className={`pointer-events-none absolute left-[64px] right-3 top-[84px] z-[880] flex flex-col gap-2.5 ${
-            showHudInspector ? 'lg:right-[410px]' : 'lg:right-4'
+          className={`pointer-events-none absolute left-3 right-3 top-[var(--hud-top)] z-[910] flex flex-col gap-2.5 lg:left-4 ${
+            showHudInspector || warningCard ? 'lg:right-[400px]' : 'lg:right-4'
           }`}
         >
-          <TacticalRibbon
-            latestQuake={effectiveLatestQuake}
-            activityIndex={effectiveActivityIndex}
-            status={effectiveStatus}
-            aiAnalysis={effectiveAiAnalysis}
-            stationCount={12}
-            tideCount={tideCount}
-            variant="hud"
+          <QuakePills
+            quake={shownQuake}
+            isDrill={isDrill}
+            counts={bmkgHealth === 'live' || bmkgHealth === 'unreported' ? liveAttention.counts : null}
+            feedState={bmkgHealth}
+            compact={warningCard !== null}
           />
-
-          {dashboardMode === 'SIMULASI' && (
-            <div className="pointer-events-auto max-w-3xl">
-              <DrillFloatingBar
-                scenarios={DRILL_SCENARIOS}
-                phases={DRILL_PHASES}
-                activeScenario={activeScenario}
-                activePhase={activePhase}
-                isPlaying={isDrillPlaying}
-                onSelectScenario={handleSelectScenario}
-                onSelectPhase={handleSelectPhase}
-                onTogglePlay={() => setIsDrillPlaying((prev) => !prev)}
-              />
-            </div>
-          )}
-
-          {showTsunamiAlert && effectiveTsunami && (
-            <div className="pointer-events-auto max-w-3xl">
-              <TsunamiPanel
-                scenario={effectiveTsunami}
-                isSimulasi={dashboardMode === 'SIMULASI'}
-                onDismiss={() => setAlertDismissed(true)}
-              />
+          {warningCard && isDesktop === false && (
+            <div className="pointer-events-auto max-h-[min(62dvh,440px)] overflow-y-auto rounded-2xl">
+              {warningCard}
             </div>
           )}
         </div>
 
-        {/* Desktop Floating Re-Open Button when Right Inspector is Hidden */}
-        {!showHudInspector && (
-          <button
-            type="button"
-            onClick={() => setShowHudInspector(true)}
-            className="glass-hud absolute right-4 top-[132px] z-[890] hidden items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-bold text-[var(--text-primary)] lg:inline-flex"
+        {/* Below `lg` the panel comes up over the map from the dock: a sheet above the dock on a
+            phone, a side panel from `sm` up. */}
+        {sheetShown && (
+          <div
+            ref={sheetRef}
+            className="pointer-events-none absolute inset-x-3 bottom-[72px] z-[920] flex max-h-[min(64%,calc(100%_-_var(--map-controls-top)_-_96px))] flex-col sm:inset-x-auto sm:right-3 sm:top-[var(--map-controls-top)] sm:max-h-none sm:w-[372px]"
+            // From `sm` the side panel ends above the bottom-right corner, where "Reset peta" sits
           >
-            <Eye className="h-3.5 w-3.5 text-[var(--accent)]" />
-            <span>Tampilkan Laporan Gempa</span>
-          </button>
-        )}
-
-        {/* Floating Right Frosted Glass Hero Inspector Card (Desktop Overlay) */}
-        {showHudInspector && (
-          <aside
-            aria-label="Inspektor Gempa Terkini"
-            className="no-scrollbar hidden lg:flex lg:flex-col lg:gap-2 lg:absolute lg:bottom-4 lg:right-4 lg:top-[84px] lg:z-[890] lg:w-[372px] lg:overflow-y-auto"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div
-                role="tablist"
-                aria-label="Panel inspektor peta"
-                className="glass-hud inline-flex items-center gap-0.5 rounded-full p-0.5"
-              >
-                {([
-                  { id: 'gempa', label: 'Gempa', Icon: Radio },
-                  { id: 'telemetri', label: 'Telemetri', Icon: Activity },
-                ] as const).map(({ id, label, Icon }) => (
-                  <button
-                    key={id}
-                    type="button"
-                    role="tab"
-                    aria-selected={inspectorTab === id}
-                    onClick={() => setInspectorTab(id)}
-                    className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold transition-colors ${
-                      inspectorTab === id
-                        ? 'bg-[var(--accent-strong)] text-white'
-                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                    }`}
-                  >
-                    <Icon className="h-3 w-3" />
-                    <span>{label}</span>
-                  </button>
-                ))}
-              </div>
+            <div className="flex shrink-0 justify-end pb-1.5">
               <button
                 type="button"
-                onClick={() => setShowHudInspector(false)}
-                className="glass-hud inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[10px] font-semibold text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                onClick={handleCloseSheet}
+                aria-label={`Tutup panel ${PANELS.find((panel) => panel.id === inspectorTab)?.label ?? ''}`}
+                title="Tutup panel"
+                className="hud-solid pointer-events-auto inline-flex h-8 w-8 items-center justify-center rounded-full text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               >
-                <EyeOff className="h-3 w-3" />
-                <span>Sembunyikan Panel</span>
+                <X className="h-4 w-4" aria-hidden="true" />
               </button>
             </div>
-
-            {inspectorTab === 'gempa' ? (
-              <LatestQuakeCard
-                quake={effectiveLatestQuake}
-                realQuakes={realQuakes}
-                onFocusMap={handleFocusMap}
-                activityPercentage={effectiveActivityLevel}
-                deepDiveTargetId="deep-analytics-section"
-              />
-            ) : (
-              <div className="glass-hud flex min-h-0 flex-1 flex-col gap-4 rounded-2xl p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono text-[10px] font-bold tracking-[0.14em] text-[var(--text-muted)] uppercase">
-                    Telemetri Real-Time
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--accent-muted)] px-2 py-0.5 font-mono text-[10px] font-bold text-[var(--accent)]">
-                    <span className="live-dot-pulse" />
-                    FLINK CEP
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-3 border-b border-[var(--border-hairline)] pb-3">
-                  <ActivityGauge
-                    percentage={effectiveActivityLevel}
-                    trend={effectiveTrend}
-                    compact
-                  />
-                  <div className="min-w-0 flex-1 font-mono text-[10px] leading-relaxed text-[var(--text-muted)] uppercase">
-                    <div className="font-bold tracking-[0.14em]">Skala Intensitas</div>
-                    <div className="mt-1 text-[var(--text-secondary)] normal-case">
-                      Estimasi MMI dari agregasi stasiun broadband BMKG &amp; pasut IOC.
-                    </div>
-                  </div>
-                </div>
-
-                <div className="border-b border-[var(--border-hairline)] pb-1">
-                  <MetricCards
-                    bare
-                    oceanStatus={
-                      effectiveTsunami?.active
-                        ? 'TSUNAMI WAVE FRONT'
-                        : effectiveStatus?.ocean_status ?? 'IOC UNESCO LIVE'
-                    }
-                    weatherStatus={effectiveStatus?.weather_status ?? 'OPEN-METEO'}
-                    infraStatus={effectiveStatus?.infra_status ?? 'OPERASIONAL'}
-                    activityIndex={effectiveActivityIndex}
-                  />
-                </div>
-
-                <div className="min-h-[220px] flex-1">
-                  <EventStream bare events={events} maxHeightClass="max-h-[320px]" />
-                </div>
-              </div>
-            )}
-          </aside>
+            <div data-panel-scroll className="no-scrollbar pointer-events-auto min-h-0 overflow-y-auto rounded-2xl">
+              {renderPanel(inspectorTab, true)}
+            </div>
+          </div>
         )}
 
-        {/* Floating Bottom-Left Live Seismograph HUD Strip (Desktop Overlay) */}
-        <div
-          className={`hidden lg:block lg:absolute lg:bottom-4 lg:left-4 lg:z-[880] ${
-            showHudInspector
-              ? 'lg:w-[540px] lg:max-w-[calc(100%-412px)]'
-              : 'lg:w-[580px] lg:max-w-[calc(100%-32px)]'
-          }`}
+        {/* Below `lg`: the icon dock that opens each topic */}
+        <nav
+          aria-label="Panel peta"
+          className="pointer-events-none absolute inset-x-3 bottom-3 z-[925] flex sm:inset-x-auto sm:left-3 lg:hidden"
         >
-          <Seismograph
-            seismicEnergy={effectiveSeismicEnergy}
-            activityLevel={effectiveActivityLevel}
-            phaseName={
-              dashboardMode === 'SIMULASI'
-                ? activePhase.phaseName
-                : 'SEISMIC_BASELINE'
-            }
-            volcanoes={volcanoes}
-            selectedVolcano={selectedVolcano}
-            onSelectVolcano={(name) => setSelectedVolcano(name)}
-            onInspectSeismogram={(v) => setInspectingSeismogram(v)}
-            isSimulasi={dashboardMode === 'SIMULASI'}
-            theme={theme}
-            compactHud={true}
-          />
-        </div>
+          <div className="hud-solid pointer-events-auto flex w-full items-center gap-0.5 rounded-2xl p-1 sm:w-auto">
+            {PANELS.map(({ id, label, Icon }) => {
+              const DockIcon = panelIcon(id, Icon);
+              const active = sheetShown && inspectorTab === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={active}
+                  aria-label={label}
+                  title={label}
+                  onClick={() => handleDockSelect(id)}
+                  className={`inline-flex h-11 min-w-0 flex-1 items-center justify-center rounded-xl transition-colors sm:w-11 sm:flex-none ${
+                    active
+                      ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--surface-2)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <DockIcon className="h-[18px] w-[18px]" aria-hidden="true" />
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+
+        {/* Right column (desktop): the warning card stays on top, the inspector below it; it ends
+            above the bottom-right corner, where "Reset peta" and the attribution sit */}
+        <aside
+          aria-label="Inspektor peta"
+          className="pointer-events-none hidden lg:absolute lg:bottom-[64px] lg:right-4 lg:top-[var(--hud-top)] lg:z-[890] lg:flex lg:w-[372px] lg:flex-col lg:gap-2"
+        >
+          {warningCard && isDesktop !== false && (
+            <div className="pointer-events-auto max-h-[58%] shrink-0 overflow-y-auto rounded-2xl">{warningCard}</div>
+          )}
+
+          {showHudInspector ? (
+            <>
+              <div className="pointer-events-auto flex shrink-0 items-center justify-between gap-2">
+                <div
+                  role="tablist"
+                  aria-label="Panel peta"
+                  className="hud-solid inline-flex items-center gap-0.5 rounded-full p-0.5"
+                  onKeyDown={(event) => {
+                    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+                    const index = PANELS.findIndex((panel) => panel.id === inspectorTab);
+                    const step = event.key === 'ArrowRight' ? 1 : PANELS.length - 1;
+                    const next = PANELS[(index + step) % PANELS.length].id;
+                    setInspectorTab(next);
+                    setAnalysisFor(null);
+                    document.getElementById(`inspector-tab-${next}`)?.focus();
+                  }}
+                >
+                  {PANELS.map(({ id, label, Icon }) => {
+                    const TabIcon = panelIcon(id, Icon);
+                    return (
+                      <button
+                        key={id}
+                        id={`inspector-tab-${id}`}
+                        type="button"
+                        role="tab"
+                        aria-selected={inspectorTab === id}
+                        aria-controls="inspector-panel"
+                        aria-label={label}
+                        title={label}
+                        tabIndex={inspectorTab === id ? 0 : -1}
+                        onClick={() => {
+                          setInspectorTab(id);
+                          setAnalysisFor(null);
+                        }}
+                        className={`inline-flex h-8 w-9 items-center justify-center rounded-full transition-colors ${
+                          inspectorTab === id
+                            ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
+                            : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                        }`}
+                      >
+                        <TabIcon className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowHudInspector(false)}
+                  aria-label="Sembunyikan panel"
+                  title="Sembunyikan panel"
+                  className="hud-solid inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                >
+                  <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </div>
+
+              <div
+                id="inspector-panel"
+                role="tabpanel"
+                aria-labelledby={`inspector-tab-${inspectorTab}`}
+                data-panel-scroll
+                className="no-scrollbar pointer-events-auto min-h-0 flex-1 overflow-y-auto rounded-2xl"
+              >
+                {/* Below `lg` the sheet carries the panel; one copy only */}
+                {isDesktop !== false && renderPanel(inspectorTab, false)}
+              </div>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowHudInspector(true)}
+              aria-label="Tampilkan panel"
+              title="Tampilkan panel"
+              className="hud-solid pointer-events-auto inline-flex h-8 w-8 items-center justify-center self-end rounded-full text-[var(--text-primary)]"
+            >
+              <Eye className="h-3.5 w-3.5 text-[var(--accent)]" aria-hidden="true" />
+            </button>
+          )}
+        </aside>
+
+        {/* Bottom-left (desktop): seismograph strip */}
+        {isDesktop !== false && (
+          <div
+            className={`hidden lg:absolute lg:bottom-4 lg:left-4 lg:z-[880] lg:block ${
+              showHudInspector || warningCard
+                ? 'lg:w-[540px] lg:max-w-[calc(100%-412px)]'
+                : 'lg:w-[580px] lg:max-w-[calc(100%-32px)]'
+            }`}
+          >
+            <Seismograph {...seismographProps} compactHud={true} />
+          </div>
+        )}
       </section>
 
-      {/* STAGE 2: ATMOSPHERIC BELOW-FOLD DEEP ANALYTICS & TELEMETRY */}
-      <main
-        id="deep-analytics-section"
-        className="relative border-t border-[var(--border-hairline)] bg-[radial-gradient(ellipse_at_top,rgba(34,211,238,0.06),transparent_65%)]"
-      >
-        <div className="mx-auto w-full max-w-[1440px] space-y-8 px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
-        {/* Mobile & Tablet Stacked Quake Card + Full Seismograph */}
-        <div className="grid grid-cols-1 gap-6 lg:hidden">
-          <LatestQuakeCard
-            quake={effectiveLatestQuake}
-            realQuakes={realQuakes}
-            onFocusMap={handleFocusMap}
-            activityPercentage={effectiveActivityLevel}
-          />
-          <Seismograph
-            seismicEnergy={effectiveSeismicEnergy}
-            activityLevel={effectiveActivityLevel}
-            phaseName={
-              dashboardMode === 'SIMULASI'
-                ? activePhase.phaseName
-                : 'SEISMIC_BASELINE'
-            }
-            volcanoes={volcanoes}
-            selectedVolcano={selectedVolcano}
-            onSelectVolcano={(name) => setSelectedVolcano(name)}
-            onInspectSeismogram={(v) => setInspectingSeismogram(v)}
-            isSimulasi={dashboardMode === 'SIMULASI'}
-            theme={theme}
-          />
-        </div>
-
-        {/* Summary & Telemetry Triad (mobile/tablet). Di desktop, panel ini menyatu dengan peta (tab "Telemetri" di inspektor kanan). */}
-        <section className="space-y-4 lg:hidden">
-          <div className="flex items-baseline justify-between border-b border-[var(--border-hairline)] pb-2.5">
-            <h2 className="font-display text-lg font-bold tracking-tight text-[var(--text-primary)] sm:text-xl">
-              Telemetri Intensitas, Sensor &amp; Aliran Kejadian
-            </h2>
-            <span className="font-mono text-[10px] tracking-wider text-[var(--accent)] uppercase">
-              Streaming Real-Time
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-            <div className="matte-card p-5 lg:col-span-4">
-              <div className="mb-2 flex items-center justify-between">
-                <span className="font-mono text-[10px] font-bold tracking-[0.14em] text-[var(--text-muted)] uppercase">
-                  Skala Intensitas (MMI)
-                </span>
-                <span className="font-mono text-[10px] font-bold text-[var(--accent)]">
-                  FLINK CEP
-                </span>
-              </div>
-              <ActivityGauge percentage={effectiveActivityLevel} trend={effectiveTrend} />
-            </div>
-
-            <div className="lg:col-span-4">
-              <MetricCards
-                oceanStatus={
-                  effectiveTsunami?.active
-                    ? 'TSUNAMI WAVE FRONT'
-                    : effectiveStatus?.ocean_status ?? 'IOC UNESCO LIVE'
-                }
-                weatherStatus={effectiveStatus?.weather_status ?? 'OPEN-METEO'}
-                infraStatus={effectiveStatus?.infra_status ?? 'OPERASIONAL'}
-                activityIndex={effectiveActivityIndex}
-              />
-            </div>
-
-            <div className="lg:col-span-4">
-              <EventStream events={events} maxHeightClass="max-h-[290px]" />
-            </div>
-          </div>
-        </section>
-
-        {/* Full-Width Atmospheric AI Sentinel & Kopilot */}
-        <section className="space-y-4">
-          <div className="flex items-baseline justify-between border-b border-[var(--border-hairline)] pb-2.5">
-            <h2 className="font-display text-lg font-bold tracking-tight text-[var(--text-primary)] sm:text-xl">
-              AI Sentinel &amp; Kopilot Keputusan
-            </h2>
-            <span className="font-mono text-[10px] tracking-wider text-[var(--text-muted)] uppercase">
-              Gemini 2.5 · AWS Bedrock
-            </span>
-          </div>
-
-          {effectiveAiAnalysis ? (
-            <AIPanel analysis={effectiveAiAnalysis} telemetryContext={telemetryContext} />
-          ) : (
-            <div className="matte-card p-8 text-center text-xs text-[var(--text-muted)]">
-              Memuat modul AI Decision Support InaTEWS...
-            </div>
-          )}
-        </section>
-
-        {/* Pemantauan Pasut IOC & Gunung Api PVMBG */}
-        <section className="space-y-6">
-          <div className="flex items-baseline justify-between border-b border-[var(--border-hairline)] pb-2.5">
-            <h2 className="font-display text-lg font-bold tracking-tight text-[var(--text-primary)] sm:text-xl">
-              Jaringan Pasang Surut &amp; Gunung Api
-            </h2>
-            <span className="font-mono text-[10px] tracking-wider text-[var(--text-muted)] uppercase">
-              IOC UNESCO · PVMBG MAGMA
-            </span>
-          </div>
-
-          <OceanPanel
-            tsunami={effectiveTsunami}
-            stations={oceanFeed?.stations}
-            oceanSource={oceanFeed?.source}
-            onFocusMap={handleFocusMap}
-          />
-
-          <VolcanoSeismographHub
-            volcanoes={volcanoes}
-            selectedVolcano={
-              selectedVolcano === 'BMKG_REGIONAL' ? 'Anak Krakatau' : selectedVolcano
-            }
-            onSelectVolcano={(name) => setSelectedVolcano(name)}
-            onInspectSeismogram={(v) => setInspectingSeismogram(v)}
-            theme={theme}
-          />
-        </section>
-
-        {/* Ringkasan Infrastruktur Streaming (Ringkas & Dapat Dibuka) */}
-        <section className="pb-8">
-          <div className="matte-card p-5">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-start gap-3">
-                <span className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-2)] text-[var(--accent)]">
-                  <Cpu className="h-4 w-4" />
-                </span>
-                <div>
-                  <h3 className="text-sm font-bold text-[var(--text-primary)]">
-                    Infrastruktur Stream Confluent Kafka, Apache Flink CEP &amp; Schema Registry
-                  </h3>
-                  <p className="mt-0.5 font-mono text-[11px] text-[var(--text-muted)]">
-                    cpool-gempa-prod · 1,480 msg/s · Watermark &lt; 140 ms · 10 Topik Avro/JSON
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setShowInfraArchitecture((prev) => !prev)}
-                className="inline-flex items-center gap-1.5 rounded-full bg-[var(--surface-2)] px-4 py-2 text-xs font-semibold text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-3)]"
-              >
-                {showInfraArchitecture ? (
-                  <ChevronDown className="h-3.5 w-3.5" />
-                ) : (
-                  <ChevronRight className="h-3.5 w-3.5" />
-                )}
-                <span>
-                  {showInfraArchitecture
-                    ? 'Tutup Arsitektur Teknis'
-                    : 'Lihat Arsitektur Flink & Katalog Schema'}
-                </span>
-              </button>
-            </div>
-
-            {showInfraArchitecture && (
-              <div className="mt-5 space-y-5 border-t border-[var(--border-hairline)] pt-5">
-                <FlinkPanel activityIndex={effectiveActivityIndex} status={effectiveStatus} />
-                <GovernanceView />
-              </div>
-            )}
-          </div>
-        </section>
-        </div>
-      </main>
-
-      {/* Modal Inspeksi Seismogram PVMBG */}
-      {inspectingSeismogram && (
-        <SeismogramAnalysisModal
-          volcano={inspectingSeismogram}
-          onClose={() => setInspectingSeismogram(null)}
-        />
-      )}
+      <AlertToasts alerts={toasts} onDismiss={dismissToast} onShowOnMap={handleShowAlertOnMap} />
     </div>
   );
 }

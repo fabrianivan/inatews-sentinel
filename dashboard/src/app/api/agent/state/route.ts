@@ -3,7 +3,7 @@ import type { AgentState } from '@/lib/types';
 import { proxyBackendJson } from '@/lib/backendProxy';
 import {
   AI_PROVIDER_COOKIE,
-  getProviderModelLabel,
+  AUTO_SUMMARY_MODEL_LABEL,
   normalizeAIProvider,
 } from '@/lib/aiContext';
 import { buildLiveAgentState, fetchLiveTelemetrySnapshot } from '@/lib/telemetry';
@@ -20,10 +20,11 @@ export async function GET(req: NextRequest) {
     req.cookies.get(AI_PROVIDER_COOKIE)?.value || process.env.AI_PROVIDER
   );
   const snapshot = await fetchLiveTelemetrySnapshot();
+  // This state is assembled from templates: no model ran, so none is named.
   const state = buildLiveAgentState({
     snapshot,
     activeProvider: provider,
-    activeModel: getProviderModelLabel(provider),
+    activeModel: AUTO_SUMMARY_MODEL_LABEL,
   });
 
   return NextResponse.json(state);

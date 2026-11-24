@@ -1,58 +1,133 @@
 'use client';
 
 import { useEffect, useRef, useState, useMemo } from 'react';
-import {
-  Activity,
-  ArrowUpRight,
-  Compass,
-  Plane,
-  Radio,
-  Wind,
-} from 'lucide-react';
+import { Activity, Radio } from 'lucide-react';
 import type { VolcanoEruption } from '@/lib/types';
+import { parseVolcanoLevel } from '@/lib/severity';
 import {
   INDONESIAN_VOLCANOES,
-  buildVolcanoInspectionReport,
+  VOLCANO_ORIGIN_LABEL,
   findVolcanoLocation,
+  countEruptionReports,
   getVolcanoReports,
-  getVolcanicAshTrajectory,
-  type VolcanicAshTrajectory,
+  isPlaceholderRecord,
+  volcanoRecordOrigin,
 } from '@/lib/volcanoData';
-import VolcanoChip from './VolcanoChip';
+import VolcanoChip, { CatalogueLevelChip } from './VolcanoChip';
+
+/** Every canvas trace in the dashboard is synthesized; each one carries this caption. */
+export const WAVEFORM_CAPTION = 'Ilustrasi gelombang — bukan data sensor langsung';
+
+export interface WaveformLoop {
+  /** Re-renders the still frame after its inputs changed; a no-op while animating. */
+  refresh: () => void;
+  stop: () => void;
+}
+
+/**
+ * Animates a synthesized trace only while its canvas is on screen and the tab
+ * is visible. With prefers-reduced-motion it renders one still frame of
+ * `stillSamples` samples instead of running a loop.
+ */
+export function startWaveformLoop(
+  canvas: HTMLCanvasElement,
+  frame: { advance: () => void; draw: () => void },
+  stillSamples: number
+): WaveformLoop {
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  let rafId: number | null = null;
+  let onScreen = false;
+
+  const cancel = () => {
+    if (rafId !== null) cancelAnimationFrame(rafId);
+    rafId = null;
+  };
+  const tick = () => {
+    frame.advance();
+    frame.draw();
+    rafId = requestAnimationFrame(tick);
+  };
+  const drawStill = () => {
+    for (let i = 0; i < stillSamples; i++) frame.advance();
+    frame.draw();
+  };
+  const resume = () => {
+    cancel();
+    if (!reducedMotion.matches && onScreen && !document.hidden) {
+      rafId = requestAnimationFrame(tick);
+    }
+  };
+  const handleMotionPreference = () => {
+    if (reducedMotion.matches) {
+      cancel();
+      drawStill();
+    } else {
+      resume();
+    }
+  };
+
+  const observer = new IntersectionObserver((entries) => {
+    onScreen = entries[entries.length - 1].isIntersecting;
+    resume();
+  });
+  observer.observe(canvas);
+  document.addEventListener('visibilitychange', resume);
+  reducedMotion.addEventListener('change', handleMotionPreference);
+
+  if (reducedMotion.matches) drawStill();
+  else frame.draw();
+
+  return {
+    refresh: () => {
+      if (reducedMotion.matches) drawStill();
+    },
+    stop: () => {
+      cancel();
+      observer.disconnect();
+      document.removeEventListener('visibilitychange', resume);
+      reducedMotion.removeEventListener('change', handleMotionPreference);
+    },
+  };
+}
 
 interface SeismographProps {
+  /** Set on one instance only: the map scrolls to it. */
+  id?: string;
   seismicEnergy?: number;
   activityLevel?: number;
   phaseName?: string;
   volcanoes?: VolcanoEruption[];
   selectedVolcano?: string | null;
   onSelectVolcano?: (name: string) => void;
-  onInspectSeismogram?: (volcano: VolcanoEruption) => void;
+  /** "Analisis PVMBG" on a volcano: the page opens that volcano's panel with its analysis. */
+  onAnalyzeVolcano?: (name: string) => void;
   isSimulasi?: boolean;
   theme?: 'dark' | 'light';
   compactHud?: boolean;
 }
 
 const BMKG_STATION_ID = 'BMKG_REGIONAL';
+const MAX_POINTS = 300;
+const CANVAS_HEIGHT = 132;
 
 export default function Seismograph({
+  id,
   seismicEnergy = 1.2,
   activityLevel = 22,
   phaseName = 'SEISMIC_BASELINE',
   volcanoes = [],
   selectedVolcano = 'Anak Krakatau',
   onSelectVolcano,
-  onInspectSeismogram,
+  onAnalyzeVolcano,
   isSimulasi = false,
   theme = 'dark',
   compactHud = false,
 }: SeismographProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const animationRef = useRef<number | null>(null);
+  const loopRef = useRef<WaveformLoop | null>(null);
   const pointsRef = useRef<number[]>([]);
   const stripRef = useRef<HTMLDivElement | null>(null);
   const [activeTarget, setActiveTarget] = useState<string>(selectedVolcano || 'Anak Krakatau');
-  const [showAshDetails, setShowAshDetails] = useState(false);
 
   useEffect(() => {
     if (selectedVolcano) {
@@ -76,48 +151,23 @@ export default function Seismograph({
     [activeTarget, isBMKGMode]
   );
 
-  const liveReport = useMemo(
+  const latestReport = useMemo(
     () => (geo ? getVolcanoReports(geo, volcanoes)[0] ?? null : null),
     [geo, volcanoes]
   );
 
-  const ashTrajectory: VolcanicAshTrajectory = useMemo(() => {
-    const targetName = isBMKGMode ? 'Anak Krakatau' : activeTarget;
-    return getVolcanicAshTrajectory(targetName);
-  }, [isBMKGMode, activeTarget]);
+  const ampNum = latestReport ? parseFloat(latestReport.amplitude.replace(/[^0-9.]/g, '')) || 35 : 15;
 
-  const ampNum = useMemo(() => {
-    if (liveReport?.amplitude) {
-      return parseFloat(liveReport.amplitude.replace(/[^0-9.]/g, '')) || 35;
-    }
-    return 15;
-  }, [liveReport]);
+  // The catalogue level only shapes how busy the illustration looks.
+  const catalogueLevel = parseVolcanoLevel(geo?.defaultLevel)?.level;
+  const burstProbability = catalogueLevel === 'awas' ? 0.22 : catalogueLevel === 'siaga' ? 0.12 : 0.05;
 
-  const alertLevel = liveReport?.alert_level || geo?.defaultLevel || 'LEVEL II (WASPADA)';
-  const isAwas = alertLevel.includes('AWAS');
-  const isSiaga = alertLevel.includes('SIAGA');
-
-  const configRef = useRef({
-    isBMKGMode,
-    ampNum,
-    seismicEnergy,
-    activityLevel,
-    isAwas,
-    isSiaga,
-    theme,
-  });
+  const configRef = useRef({ isBMKGMode, ampNum, seismicEnergy, activityLevel, burstProbability, theme });
 
   useEffect(() => {
-    configRef.current = {
-      isBMKGMode,
-      ampNum,
-      seismicEnergy,
-      activityLevel,
-      isAwas,
-      isSiaga,
-      theme,
-    };
-  }, [isBMKGMode, ampNum, seismicEnergy, activityLevel, isAwas, isSiaga, theme]);
+    configRef.current = { isBMKGMode, ampNum, seismicEnergy, activityLevel, burstProbability, theme };
+    loopRef.current?.refresh();
+  }, [isBMKGMode, ampNum, seismicEnergy, activityLevel, burstProbability, theme]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -126,44 +176,23 @@ export default function Seismograph({
     if (!ctx) return;
 
     let width = (canvas.width = canvas.parentElement?.clientWidth || 400);
-    const height = (canvas.height = 132);
+    const height = (canvas.height = CANVAS_HEIGHT);
+    const midY = height / 2;
 
-    const updateSize = () => {
-      if (!canvas || !canvas.parentElement) return;
-      width = canvas.width = canvas.parentElement.clientWidth || 400;
-    };
-
-    window.addEventListener('resize', updateSize);
-    let resizeObserver: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== 'undefined' && canvas.parentElement) {
-      resizeObserver = new ResizeObserver(updateSize);
-      resizeObserver.observe(canvas.parentElement);
-    }
-
-    const maxPoints = 300;
     if (pointsRef.current.length === 0) {
-      pointsRef.current = new Array(maxPoints).fill(height / 2);
+      pointsRef.current = new Array(MAX_POINTS).fill(midY);
     }
 
     let tick = 0;
 
-    const render = () => {
+    const advance = () => {
       tick++;
-      const {
-        isBMKGMode: isBMKG,
-        ampNum: amp,
-        seismicEnergy: energy,
-        activityLevel: act,
-        isAwas: awas,
-        isSiaga: siaga,
-        theme: currentTheme,
-      } = configRef.current;
-
-      const midY = height / 2;
+      const config = configRef.current;
       let rawOffset = 0;
 
-      if (isBMKG) {
-        const normalizedAct = Math.max(0.1, act / 100);
+      if (config.isBMKGMode) {
+        const energy = config.seismicEnergy;
+        const normalizedAct = Math.max(0.1, config.activityLevel / 100);
         const pWave = Math.sin(tick * 0.45) * (energy * 1.2);
         const sWave = Math.sin(tick * 0.15) * (energy * 2.8 * normalizedAct);
         const burst =
@@ -172,23 +201,24 @@ export default function Seismograph({
             : 0;
         rawOffset = pWave + sWave + burst;
       } else {
-        const ampScale = Math.min(45, Math.max(8, amp * 0.75));
+        const ampScale = Math.min(45, Math.max(8, config.ampNum * 0.75));
         const tremorBase = Math.sin(tick * 0.38) * (ampScale * 0.35);
         const harmonicFluid = Math.sin(tick * 0.85) * (ampScale * 0.25);
         const volcanicLP = Math.sin(tick * 0.12) * (ampScale * 0.45);
-        const burstProb = awas ? 0.22 : siaga ? 0.12 : 0.05;
         const explosionBurst =
-          Math.random() < burstProb ? (Math.random() - 0.5) * ampScale * 1.5 : 0;
+          Math.random() < config.burstProbability ? (Math.random() - 0.5) * ampScale * 1.5 : 0;
         rawOffset = tremorBase + harmonicFluid + volcanicLP + explosionBurst;
       }
 
       const clampedOffset = Math.max(-height / 2 + 10, Math.min(height / 2 - 10, rawOffset));
       pointsRef.current.push(midY + clampedOffset);
-      if (pointsRef.current.length > maxPoints) {
+      if (pointsRef.current.length > MAX_POINTS) {
         pointsRef.current.shift();
       }
+    };
 
-      const isLight = currentTheme === 'light';
+    const draw = () => {
+      const isLight = configRef.current.theme === 'light';
       ctx.fillStyle = isLight ? '#f4f8fc' : '#050914';
       ctx.fillRect(0, 0, width, height);
 
@@ -216,19 +246,12 @@ export default function Seismograph({
       ctx.stroke();
       ctx.setLineDash([]);
 
-      let strokeColor = isLight ? '#0284c7' : '#22d3ee';
-      if (!isBMKG) {
-        strokeColor = awas ? '#fb7185' : siaga ? '#fb923c' : '#fbbf24';
-      } else if (act > 80) {
-        strokeColor = '#fb7185';
-      } else if (act > 50) {
-        strokeColor = '#fb923c';
-      }
-
+      // One neutral trace colour: an illustration must not look like a severity reading.
+      const strokeColor = isLight ? '#0369a1' : '#22d3ee';
       ctx.strokeStyle = strokeColor;
       ctx.lineWidth = 1.75;
       ctx.beginPath();
-      const dx = width / (maxPoints - 1);
+      const dx = width / (MAX_POINTS - 1);
       for (let i = 0; i < pointsRef.current.length; i++) {
         const px = i * dx;
         const py = pointsRef.current[i];
@@ -242,38 +265,57 @@ export default function Seismograph({
       ctx.beginPath();
       ctx.arc(lastIdx * dx, pointsRef.current[lastIdx], 3.5, 0, Math.PI * 2);
       ctx.fill();
-
-      animationRef.current = requestAnimationFrame(render);
     };
 
-    animationRef.current = requestAnimationFrame(render);
+    // Resizing a canvas clears it, so repaint straight away (the loop may be paused).
+    const updateSize = () => {
+      if (!canvas.parentElement) return;
+      width = canvas.width = canvas.parentElement.clientWidth || 400;
+      draw();
+    };
+
+    window.addEventListener('resize', updateSize);
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && canvas.parentElement) {
+      resizeObserver = new ResizeObserver(updateSize);
+      resizeObserver.observe(canvas.parentElement);
+    }
+
+    const loop = startWaveformLoop(canvas, { advance, draw }, MAX_POINTS);
+    loopRef.current = loop;
+
     return () => {
       window.removeEventListener('resize', updateSize);
       resizeObserver?.disconnect();
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      loop.stop();
+      loopRef.current = null;
     };
   }, []);
 
+  // The BMKG trace is reported too: the page then holds no volcano as selected, so picking
+  // the same volcano again afterwards is a change it can see.
   const handleSelect = (targetName: string) => {
     setActiveTarget(targetName);
-    if (targetName !== BMKG_STATION_ID) {
-      onSelectVolcano?.(targetName);
-    }
+    onSelectVolcano?.(targetName);
   };
 
-  /** Opens the PVMBG analysis for one volcano and tunes the waveform to it. */
+  /** Opens the volcano's panel on the map at its analysis, and tunes the waveform to it. */
   const handleAnalyze = (volcanoName: string) => {
     const location = findVolcanoLocation(volcanoName);
     if (!location) return;
-    handleSelect(location.name);
-    onInspectSeismogram?.(buildVolcanoInspectionReport(location, volcanoes));
+    setActiveTarget(location.name);
+    onAnalyzeVolcano?.(location.name);
   };
+
+  // In a drill the BMKG trace follows the scenario phase, so it is marked as drill content.
+  const isScenarioTrace = isSimulasi && isBMKGMode;
+  const reportIsPlaceholder = latestReport ? isPlaceholderRecord(latestReport) : false;
 
   return (
     <div
-      id="seismograph-container"
+      id={id}
       className={`${
-        compactHud ? 'glass-hud rounded-2xl p-3' : 'matte-card p-5 sm:p-6'
+        compactHud ? 'hud-solid rounded-2xl p-3' : 'matte-card p-5 sm:p-6'
       } flex flex-col gap-2.5`}
     >
       {/* Station Selection Strip — every volcano carries its own Analisis PVMBG action */}
@@ -282,9 +324,7 @@ export default function Seismograph({
           compactHud ? 'pb-1' : 'border-b border-[var(--border-hairline)] pb-2.5'
         }`}
       >
-        <span className="shrink-0 font-mono text-[10px] font-bold tracking-wider text-[var(--text-muted)] uppercase">
-          SEISMOGRAF:
-        </span>
+        <span className="t-micro shrink-0">Seismograf</span>
         <div
           ref={stripRef}
           className="no-scrollbar relative flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [mask-image:linear-gradient(to_right,#000_calc(100%-28px),transparent)]"
@@ -294,11 +334,11 @@ export default function Seismograph({
             aria-pressed={isBMKGMode}
             data-selected={isBMKGMode}
             onClick={() => handleSelect(BMKG_STATION_ID)}
-            title="Jaringan broadband nasional BMKG (LEM / JATS)"
+            title="Jejak ilustrasi BMKG broadband — bukan aliran stasiun"
             className={`inline-flex shrink-0 items-center border font-semibold transition-colors ${
               compactHud
-                ? 'min-h-6 gap-1 rounded-full px-2 text-[10px]'
-                : 'gap-1.5 rounded-lg px-2.5 py-1.5 text-xs'
+                ? 'min-h-6 gap-1 rounded-full px-2 text-[11px]'
+                : 'min-h-8 gap-1.5 rounded-lg px-2.5 text-xs'
             } ${
               isBMKGMode
                 ? 'border-[var(--accent-border)] bg-[var(--accent-muted)] text-[var(--accent)]'
@@ -315,7 +355,8 @@ export default function Seismograph({
               name={volcano.name}
               size={compactHud ? 'sm' : 'md'}
               selected={geo?.name === volcano.name}
-              reportCount={getVolcanoReports(volcano, volcanoes).length}
+              reportCount={countEruptionReports(volcano, volcanoes)}
+              catalogueLevel={volcano.defaultLevel}
               onSelect={() => handleSelect(volcano.name)}
               onAnalyze={() => handleAnalyze(volcano.name)}
             />
@@ -326,58 +367,58 @@ export default function Seismograph({
         </div>
       </div>
 
-      {/* Metadata + Telemetry Strip */}
+      {/* Metadata strip */}
       {!compactHud && (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center gap-1.5 text-xs font-bold text-[var(--text-primary)]">
-                <Activity className="h-3.5 w-3.5 text-[var(--accent)]" />
+                <Activity className="h-3.5 w-3.5 text-[var(--accent)]" aria-hidden="true" />
                 {isBMKGMode
-                  ? 'Jaringan Broadband Nasional BMKG'
+                  ? 'BMKG Broadband — jejak ilustrasi'
                   : `Pos PGA: ${geo?.pgaStation || activeTarget}`}
               </span>
-              {!isBMKGMode && (
-                <span
-                  className={`rounded border px-1.5 py-0.5 font-mono text-[9px] font-bold ${
-                    isAwas
-                      ? 'border-[var(--sev-critical-border)] bg-[var(--sev-critical-bg)] text-[var(--sev-critical)]'
-                      : isSiaga
-                      ? 'border-[var(--sev-high-border)] bg-[var(--sev-high-bg)] text-[var(--sev-high)]'
-                      : 'border-[var(--sev-elevated-border)] bg-[var(--sev-elevated-bg)] text-[var(--sev-elevated)]'
-                  }`}
-                >
-                  {alertLevel}
-                </span>
-              )}
+              {geo && <CatalogueLevelChip levelText={geo.defaultLevel} />}
             </div>
-            <p className="mt-0.5 truncate text-[11px] text-[var(--text-muted)]">
+            <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">
               {isBMKGMode
-                ? 'Stasiun LEM (Lembang) & JATS (Jatiluhur) · Komponen Z · 100 Hz Streaming'
-                : `G. ${geo?.name} (${geo?.province}) · Elevasi ${geo?.elevation} mdpl · ${geo?.sensorType}`}
+                ? isSimulasi
+                  ? 'Ilustrasi skenario: gelombang disintesis dari fase latihan, bukan aliran stasiun BMKG.'
+                  : 'Gelombang disintesis dari indeks aktivitas dasbor, bukan aliran stasiun BMKG.'
+                : geo
+                ? `G. ${geo.name} (${geo.province}) · Elevasi ${geo.elevation} mdpl · ${geo.sensorType}`
+                : activeTarget}
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums">
-            {!isBMKGMode && liveReport ? (
+          <div className="flex flex-wrap items-center gap-2 text-[11px]">
+            {isScenarioTrace && (
+              <span className="drill-chip">Simulasi · {phaseName.replace(/_/g, ' ')}</span>
+            )}
+            {latestReport && (
               <>
-                <span className="rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2 py-0.5 text-[var(--text-secondary)]">
-                  Amp <strong className="text-[var(--sev-critical)]">{liveReport.amplitude}</strong>
+                <span className="text-[var(--text-muted)]">
+                  {VOLCANO_ORIGIN_LABEL[volcanoRecordOrigin(latestReport)]}
                 </span>
-                <span className="rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2 py-0.5 text-[var(--text-secondary)]">
-                  Durasi <strong className="text-[var(--sev-high)]">{liveReport.duration}</strong>
+                <span
+                  className={`rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2 py-0.5 text-[var(--text-secondary)] ${
+                    reportIsPlaceholder ? 'border-dashed opacity-70' : ''
+                  }`}
+                >
+                  Amp{reportIsPlaceholder ? ' (contoh)' : ''}{' '}
+                  <strong className="font-mono tabular-nums text-[var(--text-primary)]">
+                    {latestReport.amplitude}
+                  </strong>
                 </span>
-              </>
-            ) : (
-              <>
-                <span className="rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2 py-0.5 text-[var(--text-secondary)]">
-                  VEL <strong className="text-[var(--text-primary)]">{seismicEnergy.toFixed(1)} mm/s</strong>
-                </span>
-                <span className="rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2 py-0.5 text-[var(--text-secondary)]">
-                  PGA <strong className="text-[var(--text-primary)]">{((activityLevel / 100) * 0.45).toFixed(3)} g</strong>
-                </span>
-                <span className="rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-secondary)]">
-                  {phaseName}
+                <span
+                  className={`rounded border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2 py-0.5 text-[var(--text-secondary)] ${
+                    reportIsPlaceholder ? 'border-dashed opacity-70' : ''
+                  }`}
+                >
+                  Durasi{reportIsPlaceholder ? ' (contoh)' : ''}{' '}
+                  <strong className="font-mono tabular-nums text-[var(--text-primary)]">
+                    {latestReport.duration}
+                  </strong>
                 </span>
               </>
             )}
@@ -385,76 +426,22 @@ export default function Seismograph({
         </div>
       )}
 
-      {/* Oscilloscope Canvas */}
-      <div className="overflow-hidden rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-2)]">
-        <canvas ref={canvasRef} className={`block w-full ${compactHud ? 'h-[68px]' : 'h-[132px]'}`} />
-      </div>
-
-      {/* Compact VONA Volcanic Ash Summary */}
-      {!compactHud && (!isBMKGMode || isSimulasi || liveReport || isAwas || isSiaga) && (
-        <div className="rounded-lg border border-[var(--sev-high-border)] bg-[var(--sev-high-bg)] p-2.5 text-xs">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Wind className="h-3.5 w-3.5 text-[var(--sev-high)]" />
-              <span className="font-bold text-[var(--text-primary)]">
-                Sebaran Abu VONA — G. {ashTrajectory.volcanoName}
-              </span>
-              <span className="rounded bg-[var(--sev-high)] px-1.5 py-0.5 font-mono text-[9px] font-bold text-white">
-                {ashTrajectory.vonaColorCode}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2 font-mono text-[11px] text-[var(--text-secondary)]">
-              <span className="inline-flex items-center gap-1">
-                <Compass className="h-3 w-3 text-[var(--sev-high)]" />
-                {ashTrajectory.windDirectionCardinal} ({ashTrajectory.windSpeedKts} kt)
-              </span>
-              <button
-                type="button"
-                onClick={() => setShowAshDetails((prev) => !prev)}
-                className="inline-flex items-center gap-1 rounded border border-[var(--sev-high-border)] bg-[var(--surface-1)] px-2 py-0.5 font-sans text-[10px] font-semibold text-[var(--text-primary)]"
-              >
-                {showAshDetails ? 'Tutup VONA' : 'Detail VONA'}
-              </button>
-              {!isBMKGMode && (
-                <button
-                  type="button"
-                  onClick={() => handleAnalyze(activeTarget)}
-                  className="inline-flex items-center gap-1 font-sans text-[10px] font-semibold text-[var(--accent)] hover:underline"
-                >
-                  <span>Analisis PVMBG</span>
-                  <ArrowUpRight className="h-3 w-3" />
-                </button>
-              )}
-            </div>
-          </div>
-
-          {showAshDetails && (
-            <div className="mt-2 grid grid-cols-1 gap-2 border-t border-[var(--sev-high-border)] pt-2 sm:grid-cols-3">
-              <div className="rounded border border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-1.5">
-                <div className="text-[10px] text-[var(--text-muted)]">Tinggi Kolom Erupsi</div>
-                <div className="font-mono text-xs font-bold text-[var(--sev-critical)]">
-                  ±{ashTrajectory.plumeHeightMeters.toLocaleString('id-ID')} m dpl
-                </div>
-              </div>
-              <div className="rounded border border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-1.5">
-                <div className="text-[10px] text-[var(--text-muted)]">Radius &amp; Durasi Sebaran</div>
-                <div className="font-mono text-xs font-bold text-[var(--text-primary)]">
-                  {ashTrajectory.hazardRadiusKm} km · {ashTrajectory.ashDispersionDurationEst}
-                </div>
-              </div>
-              <div className="rounded border border-[var(--border-hairline)] bg-[var(--surface-1)] px-2.5 py-1.5">
-                <div className="inline-flex items-center gap-1 text-[10px] text-[var(--text-muted)]">
-                  <Plane className="h-3 w-3" /> Koridor Penerbangan
-                </div>
-                <div className="truncate text-xs font-semibold text-[var(--text-primary)]">
-                  {ashTrajectory.affectedAviationRoute}
-                </div>
-              </div>
-            </div>
-          )}
+      {/* Oscilloscope canvas — synthesized, captioned as such */}
+      <figure className="m-0">
+        <div className="overflow-hidden rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-2)]">
+          <canvas
+            ref={canvasRef}
+            aria-hidden="true"
+            className={`block w-full ${compactHud ? 'h-[68px]' : 'h-[132px]'}`}
+          />
         </div>
-      )}
+        <figcaption className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--text-muted)]">
+          {isScenarioTrace && compactHud && <span className="drill-chip">Simulasi</span>}
+          {isScenarioTrace
+            ? 'BMKG broadband: ilustrasi skenario — bukan data sensor langsung'
+            : WAVEFORM_CAPTION}
+        </figcaption>
+      </figure>
     </div>
   );
 }

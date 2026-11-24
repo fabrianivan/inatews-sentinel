@@ -20,9 +20,11 @@ export async function POST(req: NextRequest) {
   } = {};
 
   try {
-    body = await req.json();
+    const parsed: unknown = await req.json();
+    // `null` and bare values are valid JSON but not a request body.
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) body = parsed;
   } catch {
-    // ignore malformed json
+    // malformed JSON: treated as an empty body
   }
 
   const rawQuestion = String(
@@ -33,26 +35,30 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'question is required' }, { status: 400 });
   }
 
-  const proxied = await proxyBackendStream(
-    '/api/agent/chat/stream',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: rawQuestion }),
-    },
-    2200,
-    req.signal
-  );
-
-  if (proxied?.body) {
-    return new Response(proxied.body, {
-      status: 200,
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        Connection: 'keep-alive',
+  // The backend is sent the question only and answers from live data, so a
+  // drill question is answered here, where the scenario context is known.
+  if (body.context?.mode !== 'SIMULASI') {
+    const proxied = await proxyBackendStream(
+      '/api/agent/chat/stream',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: rawQuestion }),
       },
-    });
+      2200,
+      req.signal
+    );
+
+    if (proxied?.body) {
+      return new Response(proxied.body, {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache, no-transform',
+          Connection: 'keep-alive',
+        },
+      });
+    }
   }
 
   const provider = normalizeAIProvider(

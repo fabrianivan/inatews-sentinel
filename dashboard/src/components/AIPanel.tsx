@@ -1,18 +1,16 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
-  Activity,
-  AlertTriangle,
   Bot,
   Brain,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Clock,
   Cloud,
   Cpu,
+  Info,
   Lightbulb,
+  ListChecks,
   MessageSquare,
   Send,
   Sparkles,
@@ -23,7 +21,9 @@ import type {
   AgentThought,
   AgentTacticalAction,
 } from '@/lib/types';
-import type { TelemetryPromptContext } from '@/lib/aiContext';
+import { AUTO_SUMMARY_MODEL_LABEL, type TelemetryPromptContext } from '@/lib/aiContext';
+import { TONE_LABEL, toTone } from '@/lib/severity';
+import { formatWibDate, formatWibTime } from '@/lib/time';
 import { fetchAIProvider, switchAIProvider, fetchAgentState } from '@/hooks/useSSE';
 
 interface AIPanelProps {
@@ -33,79 +33,100 @@ interface AIPanelProps {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_BASE || '';
 
+const SUGGESTION_HEADING = 'Saran sistem — keputusan pada BMKG / BPBD';
+
 const SUGGESTED_PROMPTS = [
-  'Berapa perkiraan tinggi gelombang tsunami di pesisir terdekat?',
-  'Apa rekomendasi evakuasi segera untuk warga pesisir?',
-  'Bagaimana evaluasi risiko likuefaksi dan kerusakan jembatan/pelabuhan?',
-  'Apa instruksi prioritas untuk tim SAR gabungan BASARNAS dan BNPB?',
+  'Apa keterangan BMKG tentang potensi tsunami gempa terkini?',
+  'Siapa yang memutuskan evakuasi dan apa rujukan resminya?',
+  'Data apa yang tersedia tentang infrastruktur pesisir?',
 ];
 
-const AGENT_SUGGESTED_PROMPTS = [
-  'Apa direktif evakuasi darurat yang saat ini aktif diputuskan agen?',
-  'Bagaimana korelasi tremor dan anomali sensor tsunami dalam memori kerja?',
-  'Jelaskan kesimpulan siklus OODA terkini!',
-  'Apakah jembatan antar-pulau dan pelabuhan perlu ditutup sekarang?',
-];
+const PROVIDERS = [
+  { id: 'gemini', label: 'Gemini 2.5', icon: Sparkles },
+  { id: 'bedrock', label: 'AWS Bedrock', icon: Cloud },
+] as const;
 
-function statusStyle(status: string): string {
-  switch (status.toUpperCase()) {
-    case 'CRITICAL':
-      return 'border-[var(--sev-critical-border)] bg-[var(--sev-critical-bg)] text-[var(--sev-critical)]';
-    case 'HIGH':
-      return 'border-[var(--sev-high-border)] bg-[var(--sev-high-bg)] text-[var(--sev-high)]';
-    case 'ELEVATED':
-      return 'border-[var(--sev-elevated-border)] bg-[var(--sev-elevated-bg)] text-[var(--sev-elevated)]';
-    case 'ADVISORY':
-      return 'border-[var(--accent-border)] bg-[var(--accent-muted)] text-[var(--accent)]';
-    default:
-      return 'border-[var(--sev-normal-border)] bg-[var(--sev-normal-bg)] text-[var(--sev-normal)]';
-  }
-}
+const OODA_LABEL: Record<AgentThought['phase'], string> = {
+  OBSERVE: 'Amati',
+  ORIENT: 'Orientasi',
+  DECIDE: 'Putuskan',
+  ACT: 'Tindak',
+};
 
-function priorityStyle(priority: string): string {
-  switch (priority.toUpperCase()) {
-    case 'CRITICAL':
+const UNAVAILABLE = 'tidak tersedia';
+
+/** A chat answer with the model that wrote it, or a failure to get one. */
+type ChatReply =
+  | { kind: 'answer'; text: string; model: string | null }
+  | { kind: 'error'; text: string };
+
+/**
+ * Neutral three-step scale for suggestions to agencies. It is deliberately not
+ * the tone scale: a priority is a to-do order, not a statement of severity.
+ */
+function priorityLabel(priority: string): 'Segera' | 'Penting' | 'Pantau' {
+  switch (priority.trim().toUpperCase()) {
     case 'IMMEDIATE':
-      return 'border-[var(--sev-critical-border)] bg-[var(--sev-critical-bg)] text-[var(--sev-critical)]';
+    case 'CRITICAL':
+      return 'Segera';
     case 'URGENT':
     case 'HIGH':
-      return 'border-[var(--sev-high-border)] bg-[var(--sev-high-bg)] text-[var(--sev-high)]';
+      return 'Penting';
     default:
-      return 'border-[var(--accent-border)] bg-[var(--accent-muted)] text-[var(--accent)]';
+      return 'Pantau';
   }
 }
 
-function phaseStyle(phase: string): { badge: string; borderLeft: string } {
-  switch (phase.toUpperCase()) {
-    case 'OBSERVE':
-      return {
-        badge: 'border-[var(--accent-border)] bg-[var(--accent-muted)] text-[var(--accent)]',
-        borderLeft: 'border-l-[var(--accent)]',
-      };
-    case 'ORIENT':
-      return {
-        badge: 'border-purple-500/40 bg-purple-500/10 text-purple-400',
-        borderLeft: 'border-l-purple-500',
-      };
-    case 'DECIDE':
-      return {
-        badge: 'border-[var(--sev-elevated-border)] bg-[var(--sev-elevated-bg)] text-[var(--sev-elevated)]',
-        borderLeft: 'border-l-[var(--sev-elevated)]',
-      };
-    case 'ACT':
-      return {
-        badge: 'border-[var(--sev-critical-border)] bg-[var(--sev-critical-bg)] text-[var(--sev-critical)]',
-        borderLeft: 'border-l-[var(--sev-critical)]',
-      };
-    default:
-      return {
-        badge: 'border-[var(--border-hairline)] bg-[var(--surface-2)] text-[var(--text-secondary)]',
-        borderLeft: 'border-l-[var(--border-strong)]',
-      };
+function PriorityChip({ priority }: { priority: string }) {
+  return (
+    <span className="inline-flex min-h-6 shrink-0 items-center rounded-full border border-[var(--border-strong)] px-2 text-[11px] font-semibold text-[var(--text-secondary)]">
+      {priorityLabel(priority)}
+    </span>
+  );
+}
+
+/** Says who wrote a block of text; template output is set apart from a model's. */
+function ModelProvenance({ model }: { model: string | null | undefined }) {
+  const label = model?.trim();
+  if (label === AUTO_SUMMARY_MODEL_LABEL) {
+    return (
+      <span className="inline-flex min-h-6 items-center rounded-full border border-dashed border-[var(--border-strong)] px-2.5 text-xs font-semibold text-[var(--text-secondary)]">
+        {AUTO_SUMMARY_MODEL_LABEL}
+      </span>
+    );
   }
+  return <span className="t-meta">Model: {label || 'tidak diketahui'}</span>;
+}
+
+interface ReplyBlockProps {
+  reply: ChatReply;
+  title: string;
+  /** Still streaming: the model is only named once the answer is complete. */
+  pending?: boolean;
+}
+
+function ReplyBlock({ reply, title, pending = false }: ReplyBlockProps) {
+  return (
+    <div className="mt-3 rounded-xl bg-[var(--surface-1)] p-4 shadow-2xs">
+      {reply.kind === 'answer' && (
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <span className="t-micro inline-flex items-center gap-1.5">
+            <Bot aria-hidden className="h-3.5 w-3.5" />
+            {reply.model === AUTO_SUMMARY_MODEL_LABEL ? 'Ringkasan' : title}
+          </span>
+          {pending ? <span className="t-meta">Menjawab…</span> : <ModelProvenance model={reply.model} />}
+        </div>
+      )}
+      <div className="t-body whitespace-pre-wrap">{reply.text}</div>
+    </div>
+  );
 }
 
 export default function AIPanel({ analysis, telemetryContext }: AIPanelProps) {
+  const isDrill = telemetryContext?.mode === 'SIMULASI';
+  // Only this app's own routes are sent the drill context, so a drill question never goes to the backend.
+  const primaryBase = isDrill ? '' : API_BASE;
+
   const [showExplain, setShowExplain] = useState(false);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
 
@@ -115,17 +136,21 @@ export default function AIPanel({ analysis, telemetryContext }: AIPanelProps) {
   const [providerToast, setProviderToast] = useState<string | null>(null);
 
   const [question, setQuestion] = useState('');
-  const [copilotReply, setCopilotReply] = useState<string | null>(null);
+  const [copilotReply, setCopilotReply] = useState<ChatReply | null>(null);
   const [copilotLoading, setCopilotLoading] = useState(false);
-  const [copilotLatency, setCopilotLatency] = useState<number | null>(null);
 
   const [agentState, setAgentState] = useState<AgentState | null>(null);
   const [agentQuestion, setAgentQuestion] = useState('');
   const [agentStreaming, setAgentStreaming] = useState(false);
-  const [agentStreamAnswer, setAgentStreamAnswer] = useState<string | null>(null);
+  const [agentReply, setAgentReply] = useState<ChatReply | null>(null);
   const [agentLiveThoughts, setAgentLiveThoughts] = useState<AgentThought[]>([]);
   const [agentLiveActions, setAgentLiveActions] = useState<AgentTacticalAction[]>([]);
   const streamAbortController = useRef<AbortController | null>(null);
+
+  const questionId = useId();
+  const agentQuestionId = useId();
+  const detailsId = useId();
+  const factorsId = useId();
 
   useEffect(() => {
     fetchAIProvider()
@@ -178,7 +203,7 @@ export default function AIPanel({ analysis, telemetryContext }: AIPanelProps) {
       if (res && res.active) {
         setActiveProvider(res.active);
         setActiveModel(res.model);
-        setProviderToast(`Provider AI dialihkan ke ${res.model}`);
+        setProviderToast(`Penyedia model dialihkan ke ${res.model}`);
         setTimeout(() => setProviderToast(null), 3500);
         fetchAgentState()
           .then((data) => {
@@ -189,7 +214,7 @@ export default function AIPanel({ analysis, telemetryContext }: AIPanelProps) {
           .catch(() => {});
       }
     } catch {
-      setProviderToast('Gagal mengganti provider AI');
+      setProviderToast('Gagal mengganti penyedia model');
       setTimeout(() => setProviderToast(null), 3000);
     } finally {
       setSwitchingProvider(false);
@@ -214,13 +239,13 @@ export default function AIPanel({ analysis, telemetryContext }: AIPanelProps) {
     });
 
     try {
-      let res = await fetch(`${API_BASE}/api/ai/ask`, {
+      let res = await fetch(`${primaryBase}/api/ai/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: payload,
       });
 
-      if (!res.ok && API_BASE) {
+      if (!res.ok && primaryBase) {
         res = await fetch('/api/ai/ask', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -230,13 +255,16 @@ export default function AIPanel({ analysis, telemetryContext }: AIPanelProps) {
 
       if (!res.ok) throw new Error('Copilot request failed');
       const data = await res.json();
-      setCopilotReply(data.answer || 'Tidak ada tanggapan diterima dari AI.');
-      setCopilotLatency(data.latency_ms || null);
-    } catch {
       setCopilotReply(
-        'Berdasarkan analisis heuristik darurat: Prioritaskan pengosongan pesisir radius 2 km, aktifkan sirine InaTEWS, dan arahkan warga ke tempat evakuasi vertikal (>20 meter dpl).'
+        data.answer
+          ? { kind: 'answer', text: data.answer, model: typeof data.model === 'string' ? data.model : null }
+          : { kind: 'error', text: 'Tidak ada jawaban yang diterima.' }
       );
-      setCopilotLatency(150);
+    } catch {
+      setCopilotReply({
+        kind: 'error',
+        text: 'Jawaban tidak tersedia: layanan kopilot tidak dapat dihubungi. Rujuk buletin resmi BMKG.',
+      });
     } finally {
       setCopilotLoading(false);
     }
@@ -247,7 +275,7 @@ export default function AIPanel({ analysis, telemetryContext }: AIPanelProps) {
     if (!query.trim() || agentStreaming) return;
 
     setAgentStreaming(true);
-    setAgentStreamAnswer('');
+    setAgentReply({ kind: 'answer', text: '', model: null });
 
     if (streamAbortController.current) {
       streamAbortController.current.abort();
@@ -261,14 +289,14 @@ export default function AIPanel({ analysis, telemetryContext }: AIPanelProps) {
     });
 
     try {
-      let res = await fetch(`${API_BASE}/api/agent/chat/stream`, {
+      let res = await fetch(`${primaryBase}/api/agent/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: payload,
         signal: abortController.signal,
       });
 
-      if (!res.ok && API_BASE) {
+      if (!res.ok && primaryBase) {
         res = await fetch('/api/agent/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -282,6 +310,7 @@ export default function AIPanel({ analysis, telemetryContext }: AIPanelProps) {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let fullText = '';
+      let model: string | null = null;
       let buffer = '';
 
       while (true) {
@@ -298,13 +327,13 @@ export default function AIPanel({ analysis, telemetryContext }: AIPanelProps) {
             const dataStr = trimmed.slice(6);
             try {
               const parsed = JSON.parse(dataStr);
+              if (typeof parsed.model === 'string') model = parsed.model;
               if (parsed.token) {
                 fullText += parsed.token;
-                setAgentStreamAnswer(fullText);
               } else if (parsed.answer) {
                 fullText = parsed.answer;
-                setAgentStreamAnswer(fullText);
               }
+              setAgentReply({ kind: 'answer', text: fullText, model });
             } catch {
               // ignore partial chunks
             }
@@ -313,470 +342,428 @@ export default function AIPanel({ analysis, telemetryContext }: AIPanelProps) {
       }
 
       if (fullText.trim() === '') {
-        setAgentStreamAnswer('Agen selesai menganalisis memori aliran data.');
+        setAgentReply({ kind: 'error', text: 'Tidak ada jawaban yang diterima.' });
       }
     } catch (err: unknown) {
       if ((err as Error)?.name !== 'AbortError') {
-        setAgentStreamAnswer(
-          'Mode Heuristik Agen: Mengamati telemetri aktif. Ikuti instruksi evakuasi darurat sesuai status tingkat ancaman.'
-        );
+        setAgentReply({
+          kind: 'error',
+          text: 'Jawaban agen tidak tersedia: layanan tidak dapat dihubungi. Rujuk buletin resmi BMKG.',
+        });
       }
     } finally {
       setAgentStreaming(false);
     }
   };
 
+  const tone = toTone(analysis.status);
+  const hazard = analysis.hazard_details;
+  const hazardCards: Array<{ label: string; value: string | undefined }> = isDrill
+    ? [
+        { label: 'Mekanisme sesar', value: hazard?.fault_mechanism },
+        { label: 'Slip koseismik', value: hazard?.estimated_coseismic_slip },
+        { label: 'Tinggi gelombang skenario', value: hazard?.tsunami_runup_estimate },
+        {
+          label: 'Tiba gelombang pertama',
+          value:
+            hazard && hazard.evacuation_window_min > 0
+              ? `≈ ${hazard.evacuation_window_min} menit setelah gempa utama`
+              : undefined,
+        },
+      ]
+    : [
+        { label: 'Mekanisme sesar', value: hazard?.fault_mechanism },
+        { label: 'Slip koseismik', value: hazard?.estimated_coseismic_slip },
+        { label: 'Gempa susulan', value: hazard?.aftershock_risk },
+        // No public feed carries a wave height or an arrival time, whatever a payload claims.
+        {
+          label: 'Tinggi dan waktu tiba gelombang',
+          value: 'tidak tersedia dari umpan publik — rujuk peringatan dini BMKG',
+        },
+      ];
+
   return (
-    <div className="matte-card overflow-hidden">
-      {providerToast && (
-        <div className="border-b border-[var(--accent-border)] bg-[var(--accent-muted)] px-4 py-2 text-center text-xs font-semibold text-[var(--accent)]">
-          {providerToast}
-        </div>
-      )}
-
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-hairline)] px-5 py-4 sm:px-6">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2 text-sm font-bold text-[var(--text-primary)]">
-            <Bot className="h-4 w-4 text-[var(--accent)]" />
-            <span>Analisis AI Sentinel &amp; Kopilot Keputusan</span>
-          </div>
-
-          {/* Provider Switch */}
-          <div className="inline-flex rounded-full bg-[var(--surface-2)] p-0.5">
-            <button
-              type="button"
-              onClick={() => handleSwitchProvider('gemini')}
-              disabled={switchingProvider}
-              className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-semibold transition-colors ${
-                activeProvider === 'gemini'
-                  ? 'bg-[var(--accent-strong)] text-white shadow-2xs'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-              }`}
-            >
-              <Sparkles className="h-3 w-3" />
-              <span>Gemini 2.5</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSwitchProvider('bedrock')}
-              disabled={switchingProvider}
-              className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-semibold transition-colors ${
-                activeProvider === 'bedrock'
-                  ? 'bg-[var(--sev-high)] text-white shadow-2xs'
-                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-              }`}
-            >
-              <Cloud className="h-3 w-3" />
-              <span>AWS Bedrock</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Confidence & Latency */}
-        <div className="flex items-center gap-3 font-mono text-[11px] text-[var(--text-secondary)]">
-          {analysis.latency_ms ? (
-            <span className="inline-flex items-center gap-1 text-[var(--text-muted)] tabular-nums">
-              <Clock className="h-3 w-3" />
-              {analysis.latency_ms}ms
-            </span>
-          ) : null}
-          <span className="font-semibold tabular-nums">
-            Keyakinan {Math.round((analysis.confidence || 0.9) * 100)}%
-          </span>
-        </div>
-      </div>
-
-      <div className="space-y-6 p-5 sm:p-6">
-        {/* Editorial Executive Assessment Pull Quote */}
-        {(analysis.threat_summary || analysis.assessment) && (
-          <div
-            className={`border-l-2 pl-4 ${
-              analysis.status === 'CRITICAL'
-                ? 'border-[var(--sev-critical)]'
-                : analysis.status === 'HIGH'
-                  ? 'border-[var(--sev-high)]'
-                  : 'border-[var(--accent)]'
-            }`}
-          >
-            <div className="mb-1.5 flex flex-wrap items-center gap-2">
-              <span className="font-mono text-[10px] font-bold tracking-[0.14em] text-[var(--text-muted)] uppercase">
-                Ringkasan Situasi AI
-              </span>
-              <span
-                className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-bold ${statusStyle(
-                  analysis.status
-                )}`}
-              >
-                {analysis.status}
-              </span>
-            </div>
-            <p className="font-serif text-base leading-relaxed font-medium text-[var(--text-primary)] sm:text-lg">
-              {analysis.threat_summary || analysis.assessment}
-            </p>
-            {analysis.threat_summary && analysis.assessment && (
-              <p className="mt-2 text-xs leading-relaxed text-[var(--text-secondary)]">
-                {analysis.assessment}
-              </p>
-            )}
+    <div className={`@container matte-card overflow-hidden ${isDrill ? 'drill-frame' : ''}`}>
+      <div role="status">
+        {providerToast && (
+          <div className="border-b border-[var(--accent-border)] bg-[var(--accent-muted)] px-4 py-2 text-center text-xs font-semibold text-[var(--accent)]">
+            {providerToast}
           </div>
         )}
+      </div>
 
-        {/* Calm Scannable Observations & Recommendations */}
-        <div className="grid grid-cols-1 gap-6 border-t border-[var(--border-hairline)] pt-5 md:grid-cols-2">
-          <div>
-            <div className="mb-2.5 font-mono text-[10px] font-bold tracking-[0.14em] text-[var(--text-muted)] uppercase">
-              Observasi Telemetri Kunci
-            </div>
-            <ul className="space-y-2 text-xs leading-relaxed text-[var(--text-secondary)]">
-              {analysis.observations?.slice(0, 4).map((obs, i) => (
-                <li key={i} className="flex items-start gap-2.5">
-                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
-                  <span>{obs}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-hairline)] px-5 py-4 @xl:px-6">
+        <div className="flex flex-wrap items-center gap-3">
+          <h3 className="t-heading inline-flex items-center gap-2">
+            <Bot aria-hidden className="h-4 w-4 text-[var(--accent)]" />
+            Pendukung Keputusan Sentinel
+          </h3>
+          {isDrill && <span className="drill-chip">SIMULASI</span>}
 
-          <div>
-            <div className="mb-2.5 font-mono text-[10px] font-bold tracking-[0.14em] text-[var(--text-muted)] uppercase">
-              Rekomendasi Tindakan Segera
-            </div>
-            <ol className="space-y-2 text-xs leading-relaxed text-[var(--text-primary)]">
-              {analysis.recommendations?.slice(0, 4).map((rec, i) => (
-                <li key={i} className="flex items-start gap-2.5">
-                  <span className="font-mono text-[11px] font-bold text-[var(--sev-critical)]">
-                    {i + 1}.
-                  </span>
-                  <span>{rec}</span>
-                </li>
-              ))}
-            </ol>
+          <div
+            role="group"
+            aria-label="Penyedia model AI"
+            className="inline-flex rounded-full bg-[var(--surface-2)] p-0.5"
+          >
+            {PROVIDERS.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={activeProvider === id}
+                onClick={() => handleSwitchProvider(id)}
+                disabled={switchingProvider}
+                className={`inline-flex min-h-8 items-center gap-1.5 rounded-full px-3 text-xs font-semibold transition-colors ${
+                  activeProvider === id
+                    ? 'bg-[var(--accent-strong)] text-white shadow-2xs'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                <Icon aria-hidden className="h-3.5 w-3.5" />
+                <span>{label}</span>
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Upfront Clean Copilot AI Chat */}
-        <div className="rounded-2xl bg-[var(--surface-2)] p-4 sm:p-5">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <span className="inline-flex items-center gap-2 text-xs font-bold text-[var(--text-primary)]">
-              <MessageSquare className="h-3.5 w-3.5 text-[var(--accent)]" />
-              Tanya Kopilot AI ({activeModel})
+        <ModelProvenance model={analysis.model_used} />
+      </div>
+
+      <div className="space-y-6 p-5 @xl:p-6">
+        {/* Summary */}
+        <section data-tone={tone} className="border-l-2 border-[var(--tone)] pl-4">
+          <div className="mb-1.5 flex flex-wrap items-center gap-2">
+            <h4 className="t-micro">Ringkasan situasi</h4>
+            <span className="tone-chip" data-tone={tone}>
+              {TONE_LABEL[tone]}
             </span>
-            {copilotLatency && (
-              <span className="font-mono text-[10px] tabular-nums text-[var(--text-muted)]">
-                {copilotLatency}ms
-              </span>
+            <span className="t-meta">
+              {isDrill ? 'skala dasbor · nilai latihan' : 'skala dasbor · tidak resmi'}
+            </span>
+          </div>
+          <p className="text-base leading-relaxed font-medium text-[var(--text-primary)] @xl:text-lg">
+            {analysis.threat_summary || analysis.assessment || `Ringkasan ${UNAVAILABLE}.`}
+          </p>
+          {analysis.threat_summary && analysis.assessment && (
+            <p className="t-body mt-2 text-[var(--text-secondary)]">{analysis.assessment}</p>
+          )}
+        </section>
+
+        {/* Facts and suggestions */}
+        <div className="grid grid-cols-1 gap-6 border-t border-[var(--border-hairline)] pt-5 @2xl:grid-cols-2">
+          <div>
+            <h4 className="t-micro mb-2.5">
+              {isDrill ? 'Nilai skenario (latihan)' : 'Fakta dan sumbernya'}
+            </h4>
+            {analysis.observations?.length ? (
+              <ul className="t-body space-y-2 text-[var(--text-secondary)]">
+                {analysis.observations.map((obs, i) => (
+                  <li key={i} className="flex items-start gap-2.5">
+                    <span
+                      aria-hidden
+                      className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--text-muted)]"
+                    />
+                    <span>{obs}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="t-body text-[var(--text-secondary)]">Fakta {UNAVAILABLE}.</p>
             )}
+          </div>
+
+          <div>
+            <h4 className="t-micro mb-2.5">{SUGGESTION_HEADING}</h4>
+            {analysis.recommendations?.length ? (
+              <ol className="t-body list-decimal space-y-2 pl-5 marker:text-[var(--text-muted)]">
+                {analysis.recommendations.map((rec, i) => (
+                  <li key={i}>{rec}</li>
+                ))}
+              </ol>
+            ) : (
+              <p className="t-body text-[var(--text-secondary)]">Saran {UNAVAILABLE}.</p>
+            )}
+          </div>
+        </div>
+
+        {/* Copilot chat */}
+        <section className="rounded-2xl bg-[var(--surface-2)] p-4 @xl:p-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h4 className="inline-flex items-center gap-2 text-[13px] font-bold text-[var(--text-primary)]">
+              <MessageSquare aria-hidden className="h-3.5 w-3.5 text-[var(--accent)]" />
+              Tanya kopilot
+            </h4>
+            <span className="t-meta">Penyedia terpilih: {activeModel}</span>
           </div>
 
           <div className="mb-3 flex flex-wrap gap-1.5">
-            {SUGGESTED_PROMPTS.slice(0, 3).map((promptText, i) => (
+            {SUGGESTED_PROMPTS.map((promptText) => (
               <button
-                key={i}
+                key={promptText}
                 type="button"
                 onClick={() => {
                   setQuestion(promptText);
                   handleAskCopilot(promptText);
                 }}
-                className="inline-flex items-center gap-1.5 rounded-full bg-[var(--surface-1)] px-3 py-1 text-left text-[11px] font-medium text-[var(--text-secondary)] shadow-2xs transition-colors hover:text-[var(--text-primary)]"
+                className="inline-flex min-h-8 items-center gap-1.5 rounded-full bg-[var(--surface-1)] px-3 py-1 text-left text-xs font-medium text-[var(--text-secondary)] shadow-2xs transition-colors hover:text-[var(--text-primary)]"
               >
-                <Lightbulb className="h-3 w-3 shrink-0 text-[var(--sev-elevated)]" />
+                <Lightbulb aria-hidden className="h-3 w-3 shrink-0 text-[var(--text-muted)]" />
                 <span>{promptText}</span>
               </button>
             ))}
           </div>
 
+          <label htmlFor={questionId} className="t-micro mb-1.5 block">
+            Pertanyaan untuk kopilot
+          </label>
           <div className="flex gap-2">
             <input
+              id={questionId}
               type="text"
-              placeholder={`Tanyakan dampak, evakuasi, atau kondisi sensor ke ${activeProvider === 'bedrock' ? 'AWS Bedrock' : 'Gemini 2.5'}...`}
+              placeholder="Tulis pertanyaan tentang data yang tampil…"
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleAskCopilot()}
-              className="flex-1 rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] px-3.5 py-2.5 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent-border)]"
+              className="min-h-10 min-w-0 flex-1 rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] px-3.5 text-[13px] text-[var(--text-primary)] focus:border-[var(--accent-border)]"
             />
             <button
               type="button"
               onClick={() => handleAskCopilot()}
               disabled={copilotLoading}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--accent-strong)] px-4 py-2.5 text-xs font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-[var(--accent-strong)] px-4 text-[13px] font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
             >
-              <Send className="h-3.5 w-3.5" />
-              <span>{copilotLoading ? 'Proses...' : 'Tanya'}</span>
+              <Send aria-hidden className="h-3.5 w-3.5" />
+              <span>{copilotLoading ? 'Memproses…' : 'Tanya'}</span>
             </button>
           </div>
 
-          {copilotLoading && (
-            <div className="mt-3 flex items-center gap-2 text-xs text-[var(--text-secondary)]">
-              <span className="live-dot-pulse" />
-              <span>Mengkonsolidasikan telemetri live dengan {activeModel}...</span>
-            </div>
-          )}
+          <div aria-live="polite">
+            {copilotLoading && <p className="t-meta mt-3">Menyusun jawaban…</p>}
+            {copilotReply && !copilotLoading && (
+              <ReplyBlock reply={copilotReply} title="Jawaban kopilot" />
+            )}
+          </div>
+        </section>
 
-          {copilotReply && !copilotLoading && (
-            <div className="mt-3 rounded-xl bg-[var(--surface-1)] p-4 shadow-2xs">
-              <div className="mb-1.5 inline-flex items-center gap-1.5 font-mono text-[10px] font-bold text-[var(--accent)]">
-                <Bot className="h-3.5 w-3.5" /> JAWABAN KOPILOT
-              </div>
-              <div className="whitespace-pre-wrap text-xs leading-relaxed text-[var(--text-primary)]">
-                {copilotReply}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Toggleable Technical Details: Fault Dynamics, SOP & OODA Streaming Agent */}
+        {/* Hazard details, agency roles and the agent log */}
         <div className="border-t border-[var(--border-hairline)] pt-4">
           <button
             type="button"
+            aria-expanded={showTechnicalDetails}
+            aria-controls={detailsId}
             onClick={() => setShowTechnicalDetails((prev) => !prev)}
-            className="inline-flex items-center gap-2 rounded-full bg-[var(--surface-2)] px-3.5 py-1.5 text-xs font-semibold text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+            className="flex min-h-9 w-full items-center gap-2 rounded-xl bg-[var(--surface-2)] px-3.5 py-1.5 text-left text-xs font-semibold text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] @xl:inline-flex @xl:w-auto @xl:rounded-full"
           >
             {showTechnicalDetails ? (
-              <ChevronDown className="h-3.5 w-3.5" />
+              <ChevronDown aria-hidden className="h-3.5 w-3.5 shrink-0" />
             ) : (
-              <ChevronRight className="h-3.5 w-3.5" />
+              <ChevronRight aria-hidden className="h-3.5 w-3.5 shrink-0" />
             )}
-            <span>
-              Detail Teknis Sesar, SOP Multi-Lembaga &amp; Log Agen OODA (Siklus #
-              {agentState?.total_cycles || 0})
-            </span>
+            <span>Rincian bahaya, peran lembaga dan log agen</span>
           </button>
 
           {showTechnicalDetails && (
-            <div className="mt-4 space-y-5">
-              {/* Fault Dynamics & Tsunami Run-Up */}
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-xl bg-[var(--surface-2)] p-3">
-                  <div className="text-[10px] font-semibold text-[var(--text-muted)] uppercase">
-                    Mekanisme Sesar
-                  </div>
-                  <div className="mt-1 text-xs font-bold text-[var(--text-primary)]">
-                    {analysis.hazard_details?.fault_mechanism || 'Subduksi Interplate Megathrust'}
-                  </div>
-                </div>
-                <div className="rounded-xl bg-[var(--surface-2)] p-3">
-                  <div className="text-[10px] font-semibold text-[var(--text-muted)] uppercase">
-                    Coseismic Slip
-                  </div>
-                  <div className="mt-1 font-mono text-sm font-bold text-[var(--sev-high)]">
-                    {analysis.hazard_details?.estimated_coseismic_slip || '< 0.2 meter'}
-                  </div>
-                </div>
-                <div className="rounded-xl bg-[var(--surface-2)] p-3">
-                  <div className="text-[10px] font-semibold text-[var(--text-muted)] uppercase">
-                    Run-up Tsunami
-                  </div>
-                  <div className="mt-1 text-xs font-bold text-[var(--ocean-cyan)]">
-                    {analysis.hazard_details?.tsunami_runup_estimate || 'Tidak berpotensi tsunami'}
-                  </div>
-                </div>
-                <div className="rounded-xl bg-[var(--surface-2)] p-3">
-                  <div className="text-[10px] font-semibold text-[var(--text-muted)] uppercase">
-                    Jendela Evakuasi
-                  </div>
-                  <div className="mt-1 font-mono text-sm font-bold tabular-nums text-[var(--sev-critical)]">
-                    {analysis.hazard_details?.evacuation_window_min ?? 15} Menit
-                  </div>
-                </div>
-              </div>
-
-              {/* Multi-Agency SOP */}
-              {analysis.agency_actions && analysis.agency_actions.length > 0 && (
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                  {analysis.agency_actions.map((act, i) => (
-                    <div key={i} className="rounded-xl bg-[var(--surface-2)] p-3.5">
-                      <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className="text-xs font-bold text-[var(--text-primary)]">
-                          {act.agency}
-                        </span>
-                        <span
-                          className={`rounded-full px-2 py-0.5 font-mono text-[9px] font-bold ${priorityStyle(
-                            act.priority
-                          )}`}
-                        >
-                          {act.priority}
-                        </span>
-                      </div>
-                      <p className="text-[11px] leading-relaxed text-[var(--text-secondary)]">
-                        {act.action}
-                      </p>
+            <div id={detailsId} className="mt-4 space-y-5">
+              <div>
+                <dl className="grid grid-cols-1 gap-3 @xl:grid-cols-2 @4xl:grid-cols-4">
+                  {hazardCards.map(({ label, value }) => (
+                    <div key={label} className="rounded-xl bg-[var(--surface-2)] p-3">
+                      <dt className="t-micro">{label}</dt>
+                      <dd className="t-body mt-1 font-semibold">{value?.trim() || UNAVAILABLE}</dd>
                     </div>
                   ))}
+                </dl>
+                <p className="t-meta mt-2">
+                  {isDrill
+                    ? 'Nilai latihan — bukan hasil pemodelan dan bukan data BMKG / PVMBG.'
+                    : 'Bukan pengukuran. Parameter resmi hanya dari BMKG.'}
+                </p>
+              </div>
+
+              {analysis.agency_actions && analysis.agency_actions.length > 0 && (
+                <div>
+                  <h4 className="t-micro mb-2.5">{SUGGESTION_HEADING}</h4>
+                  <ul className="grid grid-cols-1 gap-3 @2xl:grid-cols-3">
+                    {analysis.agency_actions.map((act, i) => (
+                      <li key={i} className="rounded-xl bg-[var(--surface-2)] p-3.5">
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <span className="text-[13px] font-bold text-[var(--text-primary)]">
+                            {act.agency}
+                          </span>
+                          <PriorityChip priority={act.priority} />
+                        </div>
+                        <p className="t-body text-[var(--text-secondary)]">{act.action}</p>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
 
-              {/* OODA Streaming Agent Log & Stream */}
-              <div className="rounded-2xl bg-[var(--surface-2)] p-4">
+              {/* Agent log and stream */}
+              <section className="rounded-2xl bg-[var(--surface-2)] p-4">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <span className="inline-flex items-center gap-1.5 text-xs font-bold text-[var(--text-primary)]">
-                    <Cpu className="h-3.5 w-3.5 text-[var(--accent)]" />
-                    Memori Agen Streaming OODA ({agentState?.status || 'MONITORING'})
-                  </span>
-                  <span className="font-mono text-[10px] text-[var(--text-muted)]">
-                    Siklus #{agentState?.total_cycles || 0}
-                  </span>
+                  <h4 className="inline-flex items-center gap-1.5 text-[13px] font-bold text-[var(--text-primary)]">
+                    <Cpu aria-hidden className="h-3.5 w-3.5 text-[var(--accent)]" />
+                    Log agen pemantau
+                  </h4>
+                  {!isDrill && agentState && <ModelProvenance model={agentState.active_model} />}
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div className="rounded-xl bg-[var(--surface-1)] p-3">
-                    <div className="mb-2 flex items-center gap-1.5 text-[11px] font-bold text-[var(--text-primary)]">
-                      <Brain className="h-3.5 w-3.5 text-[var(--accent)]" />
-                      Alur Penalaran
-                    </div>
-                    <div className="flex max-h-[150px] flex-col gap-1.5 overflow-y-auto pr-1">
+                {isDrill ? (
+                  // The log is built from the real feeds; under a drill frame it would read as drill data.
+                  <p className="t-meta">
+                    Log agen membaca umpan nyata dan tidak ditampilkan selama latihan.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 gap-3 @xl:grid-cols-2">
+                    <div className="rounded-xl bg-[var(--surface-1)] p-3">
+                      <h5 className="t-micro mb-2 flex items-center gap-1.5">
+                        <Brain aria-hidden className="h-3.5 w-3.5" />
+                        Catatan agen
+                      </h5>
                       {agentLiveThoughts.length === 0 ? (
-                        <p className="text-[11px] text-[var(--text-muted)]">Menunggu siklus OODA...</p>
+                        <p className="t-meta">Belum ada catatan.</p>
                       ) : (
-                        agentLiveThoughts
-                          .slice(-4)
-                          .reverse()
-                          .map((th, i) => {
-                            const style = phaseStyle(th.phase);
-                            return (
-                              <div
+                        <ul className="flex max-h-48 flex-col gap-1.5 overflow-y-auto pr-1">
+                          {agentLiveThoughts
+                            .slice(-4)
+                            .reverse()
+                            .map((th, i) => (
+                              <li
                                 key={i}
-                                className={`rounded-lg border-l-2 bg-[var(--surface-2)] p-2 text-[11px] ${style.borderLeft}`}
+                                className="rounded-lg border-l-2 border-l-[var(--border-strong)] bg-[var(--surface-2)] p-2"
                               >
-                                <div className="mb-0.5 flex items-center justify-between font-mono text-[9px]">
-                                  <span className="font-bold text-[var(--accent)]">{th.phase}</span>
-                                  <span className="text-[var(--text-muted)] tabular-nums">
-                                    {new Date(th.timestamp).toLocaleTimeString('id-ID')}
-                                  </span>
+                                <div className="mb-0.5 flex items-center justify-between gap-2">
+                                  <span className="t-micro">{OODA_LABEL[th.phase] ?? 'Catatan'}</span>
+                                  <time dateTime={th.timestamp} className="t-meta tabular-nums">
+                                    {formatWibDate(th.timestamp, { year: false })} · {formatWibTime(th.timestamp)}
+                                  </time>
                                 </div>
-                                <p className="leading-snug text-[var(--text-secondary)]">{th.message}</p>
-                              </div>
-                            );
-                          })
+                                <p className="text-xs leading-snug text-[var(--text-secondary)]">
+                                  {th.message}
+                                </p>
+                              </li>
+                            ))}
+                        </ul>
                       )}
                     </div>
-                  </div>
 
-                  <div className="rounded-xl bg-[var(--surface-1)] p-3">
-                    <div className="mb-2 flex items-center gap-1.5 text-[11px] font-bold text-[var(--text-primary)]">
-                      <Activity className="h-3.5 w-3.5 text-[var(--sev-critical)]" />
-                      Direktif Otomatis
-                    </div>
-                    <div className="flex max-h-[150px] flex-col gap-1.5 overflow-y-auto pr-1">
+                    <div className="rounded-xl bg-[var(--surface-1)] p-3">
+                      <h5 className="t-micro mb-2 flex items-center gap-1.5">
+                        <ListChecks aria-hidden className="h-3.5 w-3.5 shrink-0" />
+                        {SUGGESTION_HEADING}
+                      </h5>
                       {agentLiveActions.length === 0 ? (
-                        <p className="text-[11px] text-[var(--text-muted)]">
-                          Tidak ada eskalasi kritis aktif.
-                        </p>
+                        <p className="t-meta">Belum ada saran tercatat.</p>
                       ) : (
-                        agentLiveActions
-                          .slice(-4)
-                          .reverse()
-                          .map((act, i) => (
-                            <div key={i} className="rounded-lg bg-[var(--surface-2)] p-2 text-[11px]">
-                              <div className="flex items-center justify-between gap-1 font-bold text-[var(--text-primary)]">
-                                <span className="truncate">
-                                  {act.agency} · {act.type}
-                                </span>
-                                <span className="font-mono text-[9px] text-[var(--sev-critical)]">
-                                  {act.priority}
-                                </span>
-                              </div>
-                              <p className="mt-0.5 line-clamp-2 text-[10px] text-[var(--text-secondary)]">
-                                {act.target_zone}: {act.rationale}
-                              </p>
-                            </div>
-                          ))
+                        <ul className="flex max-h-48 flex-col gap-1.5 overflow-y-auto pr-1">
+                          {agentLiveActions
+                            .slice(-4)
+                            .reverse()
+                            .map((act, i) => (
+                              <li key={i} className="rounded-lg bg-[var(--surface-2)] p-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="truncate text-xs font-bold text-[var(--text-primary)]">
+                                    {act.agency}
+                                  </span>
+                                  <PriorityChip priority={act.priority} />
+                                </div>
+                                <p className="mt-0.5 line-clamp-2 text-xs text-[var(--text-secondary)]">
+                                  {act.target_zone}: {act.rationale}
+                                </p>
+                              </li>
+                            ))}
+                        </ul>
                       )}
                     </div>
                   </div>
-                </div>
+                )}
 
-                <div className="mt-3 flex gap-2">
+                <label htmlFor={agentQuestionId} className="t-micro mt-3 mb-1.5 block">
+                  Pertanyaan untuk agen
+                </label>
+                <div className="flex gap-2">
                   <input
+                    id={agentQuestionId}
                     type="text"
-                    placeholder="Tanyakan langsung ke stream memori Agen OODA..."
+                    placeholder="Tulis pertanyaan untuk agen…"
                     value={agentQuestion}
                     onChange={(e) => setAgentQuestion(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleAskAgentStream()}
-                    className="flex-1 rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] px-3 py-2 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent-border)]"
+                    className="min-h-10 min-w-0 flex-1 rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] px-3 text-[13px] text-[var(--text-primary)] focus:border-[var(--accent-border)]"
                   />
                   <button
                     type="button"
                     onClick={() => handleAskAgentStream()}
                     disabled={agentStreaming}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--accent-strong)] px-3.5 py-2 text-xs font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                    className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-[var(--accent-strong)] px-3.5 text-[13px] font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
                   >
-                    <Send className="h-3.5 w-3.5" />
-                    <span>{agentStreaming ? 'Stream...' : 'Stream'}</span>
+                    <Send aria-hidden className="h-3.5 w-3.5" />
+                    <span>{agentStreaming ? 'Menjawab…' : 'Kirim'}</span>
                   </button>
                 </div>
 
-                {(agentStreaming || agentStreamAnswer) && (
-                  <div className="mt-3 rounded-xl bg-[var(--surface-1)] p-3 text-xs leading-relaxed text-[var(--text-primary)] whitespace-pre-wrap">
-                    {agentStreamAnswer}
-                    {agentStreaming && (
-                      <span className="ml-1 inline-block h-3.5 w-1.5 animate-pulse bg-[var(--accent)] align-middle" />
-                    )}
-                  </div>
-                )}
-              </div>
+                {/* aria-busy holds the announcement until the stream has finished */}
+                <div aria-live="polite" aria-busy={agentStreaming}>
+                  {agentReply && (
+                    <ReplyBlock reply={agentReply} title="Jawaban agen" pending={agentStreaming} />
+                  )}
+                </div>
+              </section>
             </div>
           )}
         </div>
 
-        {/* Explainability Accordion */}
+        {/* What the summary was built from */}
         {analysis.contributing_factors && analysis.contributing_factors.length > 0 && (
-          <div className="mt-4 border-t border-[var(--border-hairline)] pt-3">
+          <div className="border-t border-[var(--border-hairline)] pt-4">
             <button
               type="button"
-              onClick={() => setShowExplain(!showExplain)}
-              className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              aria-expanded={showExplain}
+              aria-controls={factorsId}
+              onClick={() => setShowExplain((prev) => !prev)}
+              className="flex min-h-9 w-full items-center gap-2 rounded-xl bg-[var(--surface-2)] px-3.5 py-1.5 text-left text-xs font-semibold text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] @xl:inline-flex @xl:w-auto @xl:rounded-full"
             >
               {showExplain ? (
-                <ChevronDown className="h-3.5 w-3.5" />
+                <ChevronDown aria-hidden className="h-3.5 w-3.5 shrink-0" />
               ) : (
-                <ChevronRight className="h-3.5 w-3.5" />
+                <ChevronRight aria-hidden className="h-3.5 w-3.5 shrink-0" />
               )}
-              <span>
-                Faktor Penentu Tingkat Risiko ({activeProvider === 'bedrock' ? 'AWS Bedrock' : 'Gemini AI'})
-              </span>
+              <span>Data yang dirangkum ({analysis.contributing_factors.length})</span>
             </button>
 
             {showExplain && (
-              <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <dl id={factorsId} className="mt-3 grid grid-cols-1 gap-2 @xl:grid-cols-2">
                 {analysis.contributing_factors.map((factor, i) => (
                   <div
                     key={i}
                     className="rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-2)] p-2.5"
                   >
-                    <div className="flex items-center justify-between text-xs font-semibold text-[var(--text-primary)]">
-                      <span className="inline-flex items-center gap-1.5">
-                        <CheckCircle2 className="h-3.5 w-3.5 text-[var(--sev-normal)]" />
-                        {factor.indicator}
-                      </span>
-                      <span className="font-mono text-[11px] tabular-nums text-[var(--accent)]">
-                        {Math.round((factor.significance || 0) * 100)}%
-                      </span>
-                    </div>
-                    <div className="mt-1 font-mono text-[11px] text-[var(--text-secondary)]">
-                      {factor.value} — {factor.change}
-                    </div>
-                    <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-[var(--surface-1)]">
-                      <div
-                        className="h-full rounded-full bg-[var(--accent)]"
-                        style={{ width: `${Math.min(100, (factor.significance || 0) * 100)}%` }}
-                      />
-                    </div>
+                    <dt className="text-xs font-semibold text-[var(--text-primary)]">
+                      {factor.indicator}
+                    </dt>
+                    <dd className="mt-1 flex flex-wrap items-baseline justify-between gap-x-3">
+                      <span className="t-data text-[var(--text-primary)]">{factor.value}</span>
+                      <span className="t-micro">{factor.change}</span>
+                    </dd>
                   </div>
                 ))}
-              </div>
+              </dl>
             )}
           </div>
         )}
 
         {/* Disclaimer */}
-        <div className="mt-4 flex items-center gap-2 rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-2)] px-3 py-2 text-[11px] text-[var(--text-muted)]">
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--sev-elevated)]" />
+        <p
+          role="note"
+          className="t-meta flex items-start gap-2 rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-2)] px-3 py-2"
+        >
+          <Info aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
           <span>
             {analysis.disclaimer ||
-              'Sistem pendukung keputusan berbasis telemetri streaming; rujukan resmi tetap mengacu pada diseminasi BMKG.'}
+              'Pendukung keputusan tidak resmi. Rujukan resmi tetap BMKG, PVMBG dan BPBD setempat.'}
           </span>
-        </div>
+        </p>
       </div>
     </div>
   );

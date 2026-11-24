@@ -21,9 +21,9 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "INATEWS SENTINEL — Sistem Peringatan Dini Gempa & Tsunami Indonesia",
+  title: "INATEWS SENTINEL — dasbor pemantauan tidak resmi",
   description:
-    "Pusat pemantauan atmosferik kegempaan, tsunami, dan gunung api Indonesia berbasis BMKG TEWS, IOC UNESCO, PVMBG MAGMA, dan AI.",
+    "Dasbor pemantauan tidak resmi untuk gempa, tsunami, dan gunung api Indonesia dari data publik BMKG, USGS, IOC, dan PVMBG. Bukan produk BMKG dan bukan sumber peringatan dini.",
   icons: {
     icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
   },

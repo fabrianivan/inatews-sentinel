@@ -1,14 +1,9 @@
 'use client';
 
-import { useState, useMemo, useEffect, useRef } from 'react';
-import {
-  AlertTriangle,
-  ChevronDown,
-  Crosshair,
-  Search,
-  Waves,
-} from 'lucide-react';
+import { useId, useMemo, useState } from 'react';
+import { ChevronDown, Crosshair, Search, Waves } from 'lucide-react';
 import type { TsunamiScenario } from '@/lib/types';
+import { formatDecimal, formatWibDateTime } from '@/lib/time';
 import {
   SEEDED_IOC_STATIONS,
   applyTsunamiToStations,
@@ -20,395 +15,351 @@ interface OceanPanelProps {
   stations?: IOCStationReading[];
   oceanSource?: 'IOC_LIVE' | 'FALLBACK';
   onFocusMap?: (lat: number, lon: number) => void;
+  /** Drill mode: the only mode in which station surges are synthesized and shown. */
+  isSimulasi?: boolean;
+  /**
+   * What the per-station level is. The IOC station list carries no live
+   * sea-level observation, so levels are reference constants unless the feed
+   * says otherwise.
+   */
+  levelKind?: 'reference' | 'observed';
 }
 
-type OceanFilter = 'ALL' | 'ANOMALY' | 'NOMINAL';
+type DrillFilter = 'ALL' | 'SURGED' | 'UNCHANGED';
+
+const COLLAPSED_ROWS = 7;
+
+/** "+0.83m" -> "+0,83 m" */
+function formatMetresText(text: string): string {
+  return text.replace('.', ',').replace(/m$/, ' m');
+}
 
 export default function OceanPanel({
   tsunami,
   stations,
   oceanSource,
   onFocusMap,
+  isSimulasi = false,
+  levelKind = 'reference',
 }: OceanPanelProps) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<OceanFilter>('ALL');
+  const [drillFilter, setDrillFilter] = useState<DrillFilter>('ALL');
   const [showAllRows, setShowAllRows] = useState(false);
-
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const tsunamiStateRef = useRef<{ active: boolean; anomaly: number }>({
-    active: Boolean(tsunami?.active),
-    anomaly: tsunami?.wave_anomaly ?? 0,
-  });
-
-  useEffect(() => {
-    tsunamiStateRef.current = {
-      active: Boolean(tsunami?.active),
-      anomaly: tsunami?.wave_anomaly ?? 0,
-    };
-  }, [tsunami?.active, tsunami?.wave_anomaly]);
-
-  // Live animated ocean tide & tsunami bore wave monitor canvas
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    let width = (canvas.width = canvas.parentElement?.clientWidth || 640);
-    const height = (canvas.height = 84);
-
-    const handleResize = () => {
-      if (!canvas || !canvas.parentElement) return;
-      width = canvas.width = canvas.parentElement.clientWidth || 640;
-    };
-    window.addEventListener('resize', handleResize);
-
-    let rafId: number | null = null;
-    let phase = 0;
-
-    const render = () => {
-      if (!document.hidden) {
-        phase += tsunamiStateRef.current.active ? 0.085 : 0.032;
-        const { active, anomaly } = tsunamiStateRef.current;
-
-        const isLight = document.documentElement.getAttribute('data-theme') === 'light';
-        ctx.fillStyle = isLight ? '#f4f8fc' : '#050914';
-        ctx.fillRect(0, 0, width, height);
-
-        // Baseline horizon grid
-        const midY = height * 0.58;
-        ctx.strokeStyle = isLight ? 'rgba(15, 23, 42, 0.07)' : 'rgba(148, 163, 184, 0.09)';
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(0, midY);
-        ctx.lineTo(width, midY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        const amp = active ? Math.min(28, 12 + anomaly * 1.1) : 6.5;
-
-        // Draw Secondary Back Wave
-        ctx.beginPath();
-        for (let x = 0; x <= width; x += 4) {
-          const norm = x / width;
-          const envelope = active ? 0.65 + 0.35 * Math.sin(norm * Math.PI * 2 - phase * 0.6) : 1;
-          const y =
-            midY -
-            Math.sin(x * 0.018 - phase * 0.75) * (amp * 0.55) * envelope -
-            Math.cos(x * 0.042 - phase * 1.1) * (amp * 0.25);
-          if (x === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = active ? 'rgba(251, 113, 133, 0.35)' : 'rgba(34, 211, 238, 0.32)';
-        ctx.lineWidth = 1.4;
-        ctx.stroke();
-
-        // Draw Primary Tsunami / Tide Crest Wave with Gradient Fill
-        ctx.beginPath();
-        for (let x = 0; x <= width; x += 3) {
-          const norm = x / width;
-          const surgePeak = active
-            ? Math.exp(-Math.pow((norm - ((phase * 0.14) % 1.2) + 0.1) * 4.5, 2)) * amp * 0.9
-            : 0;
-          const y =
-            midY -
-            Math.sin(x * 0.024 - phase) * (amp * 0.65) -
-            Math.sin(x * 0.055 - phase * 1.4) * (amp * 0.22) -
-            surgePeak;
-          if (x === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = active ? '#fb7185' : '#22d3ee';
-        ctx.lineWidth = active ? 2.4 : 1.8;
-        ctx.stroke();
-
-        ctx.lineTo(width, height);
-        ctx.lineTo(0, height);
-        ctx.closePath();
-
-        const grad = ctx.createLinearGradient(0, 8, 0, height);
-        if (active) {
-          grad.addColorStop(0, 'rgba(251, 113, 133, 0.34)');
-          grad.addColorStop(1, 'rgba(251, 113, 133, 0.02)');
-        } else {
-          grad.addColorStop(0, 'rgba(34, 211, 238, 0.26)');
-          grad.addColorStop(1, 'rgba(34, 211, 238, 0.02)');
-        }
-        ctx.fillStyle = grad;
-        ctx.fill();
-      }
-      rafId = requestAnimationFrame(render);
-    };
-
-    rafId = requestAnimationFrame(render);
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      if (rafId !== null) cancelAnimationFrame(rafId);
-    };
-  }, []);
+  const searchId = useId();
+  const tableId = useId();
 
   const baseStations = stations && stations.length > 0 ? stations : SEEDED_IOC_STATIONS;
 
-  const computedStations = useMemo(
-    () => applyTsunamiToStations(baseStations, tsunami),
-    [baseStations, tsunami]
+  // Surges exist only inside a drill; in REAL mode the feed's rows are shown untouched.
+  const rows = useMemo(
+    () => (isSimulasi ? applyTsunamiToStations(baseStations, tsunami) : baseStations),
+    [baseStations, isSimulasi, tsunami]
   );
+  const isSurged = (station: IOCStationReading) => isSimulasi && station.isAnomaly;
 
-  const anomalyCount = useMemo(
-    () => computedStations.filter((st) => st.isAnomaly).length,
-    [computedStations]
-  );
+  const liveCount = baseStations.filter((station) => station.source === 'IOC_LIVE').length;
+  const seededCount = baseStations.length - liveCount;
+  const registryLive = oceanSource === 'IOC_LIVE' || liveCount > 0;
+  // No answer yet is not the same as IOC being unreachable.
+  const registryLoading = stations === undefined;
+  const surgedCount = isSimulasi ? rows.filter((station) => station.isAnomaly).length : 0;
 
-  const liveFeedCount = useMemo(
-    () => baseStations.filter((st) => st.source === 'IOC_LIVE').length,
-    [baseStations]
-  );
+  const activeFilter: DrillFilter = isSimulasi ? drillFilter : 'ALL';
+  const query = searchQuery.trim().toLowerCase();
 
-  const filteredStations = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return computedStations
-      .filter((st) => {
-        if (statusFilter === 'ANOMALY' && !st.isAnomaly) return false;
-        if (statusFilter === 'NOMINAL' && st.isAnomaly) return false;
-        if (!q) return true;
-        return (
-          st.code.toLowerCase().includes(q) ||
-          st.name.toLowerCase().includes(q) ||
-          st.type.toLowerCase().includes(q)
-        );
-      })
-      .sort((a, b) => Number(b.isAnomaly) - Number(a.isAnomaly));
-  }, [computedStations, searchQuery, statusFilter]);
+  const filteredStations = rows
+    .filter((station) => {
+      if (activeFilter === 'SURGED' && !station.isAnomaly) return false;
+      if (activeFilter === 'UNCHANGED' && station.isAnomaly) return false;
+      if (!query) return true;
+      return (
+        station.code.toLowerCase().includes(query) ||
+        station.name.toLowerCase().includes(query) ||
+        station.type.toLowerCase().includes(query)
+      );
+    })
+    .sort((a, b) => Number(isSurged(b)) - Number(isSurged(a)));
 
+  const isNarrowed = Boolean(query) || activeFilter !== 'ALL';
   const displayedStations =
-    searchQuery.trim() || statusFilter !== 'ALL' || showAllRows
-      ? filteredStations
-      : filteredStations.slice(0, 7);
+    isNarrowed || showAllRows ? filteredStations : filteredStations.slice(0, COLLAPSED_ROWS);
+
+  const levelHeading = levelKind === 'observed' ? 'Muka air' : 'Acuan';
+  const columnCount = 4 + (isSimulasi ? 1 : 0) + (onFocusMap ? 1 : 0);
 
   return (
-    <div className="matte-card overflow-hidden p-5 sm:p-6">
-      {/* Header Summary */}
-      <div className="flex flex-col justify-between gap-4 border-b border-[var(--border-hairline)] pb-5 lg:flex-row lg:items-center">
-        <div>
+    <div className="@container matte-card overflow-hidden p-4 @xl:p-6">
+      <div className="flex flex-col justify-between gap-4 border-b border-[var(--border-hairline)] pb-5 @4xl:flex-row @4xl:items-start">
+        <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2.5">
-            <span className="inline-flex items-center gap-1.5 text-sm font-bold text-[var(--text-primary)]">
-              <Waves className="h-4 w-4 text-[var(--accent)]" />
-              Pemantauan Muka Air Laut (IOC UNESCO &amp; DART)
-            </span>
-            <span className="rounded-full bg-[var(--sev-normal-bg)] px-2.5 py-0.5 font-mono text-[10px] font-bold text-[var(--sev-normal)]">
-              {oceanSource === 'IOC_LIVE' || liveFeedCount > 0
-                ? `IOC LIVE · ${liveFeedCount} STASIUN`
-                : 'JARINGAN STANDBY'}
+            <h3 className="t-heading inline-flex items-center gap-1.5">
+              <Waves className="h-4 w-4 text-[var(--accent)]" aria-hidden="true" />
+              Stasiun pasang surut (IOC)
+            </h3>
+            <span className="t-meta inline-flex items-center gap-1.5 font-semibold">
+              <span
+                className="status-dot"
+                data-state={registryLive ? 'live' : registryLoading ? undefined : 'seed'}
+                aria-hidden="true"
+              />
+              {registryLive
+                ? 'Daftar stasiun: live dari IOC'
+                : registryLoading
+                  ? 'Daftar stasiun: memuat dari IOC — sementara daftar bawaan'
+                  : 'Daftar stasiun: cadangan bawaan (IOC tidak terjangkau)'}
             </span>
           </div>
-          <p className="mt-1 text-xs text-[var(--text-secondary)]">
-            Deteksi anomali kenaikan gelombang pesisir dan verifikasi propagasi tsunami Nusantara.
+          <p className="t-meta mt-1 max-w-2xl">
+            {levelKind === 'observed'
+              ? 'Daftar stasiun dan nilai muka air dari IOC Sea Level Station Monitoring Facility.'
+              : 'Hanya daftar stasiun yang berasal dari IOC. Pengamatan muka laut langsung tidak tersedia di umpan ini — kolom “Acuan” adalah nilai acuan per stasiun, bukan pengukuran.'}
           </p>
         </div>
 
-        <div className="grid grid-cols-3 divide-x divide-[var(--border-hairline)] lg:min-w-[380px]">
+        <dl className="grid shrink-0 grid-cols-3 divide-x divide-[var(--border-hairline)] @4xl:min-w-[380px]">
           <div className="pr-4">
-            <div className="text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
-              Total Pasut
-            </div>
-            <div className="font-display mt-0.5 text-2xl font-bold tabular-nums text-[var(--text-primary)]">
+            <dt className="t-micro">Terdaftar</dt>
+            <dd className="font-display mt-0.5 text-2xl font-bold tabular-nums text-[var(--text-primary)]">
               {baseStations.length}
-            </div>
+            </dd>
           </div>
           <div className="px-4">
-            <div className="text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
-              Anomali
-            </div>
-            <div
-              className={`font-display mt-0.5 text-2xl font-bold tabular-nums ${
-                anomalyCount > 0 ? 'text-[var(--sev-critical)]' : 'text-[var(--sev-normal)]'
-              }`}
-            >
-              {anomalyCount}
-            </div>
+            <dt className="t-micro">Dari IOC</dt>
+            <dd className="font-display mt-0.5 text-2xl font-bold tabular-nums text-[var(--text-primary)]">
+              {liveCount}
+            </dd>
           </div>
           <div className="pl-4">
-            <div className="text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">
-              Status Tsunami
-            </div>
-            <div
-              className={`mt-1.5 font-mono text-xs font-bold ${
-                tsunami?.active ? 'text-[var(--sev-critical)]' : 'text-[var(--sev-normal)]'
-              }`}
-            >
-              {tsunami?.active ? 'GELOMBANG AKTIF' : 'AMAN'}
-            </div>
+            <dt className="t-micro">Cadangan</dt>
+            <dd className="font-display mt-0.5 text-2xl font-bold tabular-nums text-[var(--text-primary)]">
+              {seededCount}
+            </dd>
           </div>
-        </div>
+        </dl>
       </div>
 
-      {/* Live Animated Tide & Tsunami Surge Waveform Strip */}
-      <div className="mt-4 overflow-hidden rounded-xl border border-[var(--border-hairline)]">
-        <div className="flex items-center justify-between bg-[var(--surface-subtle)] px-3.5 py-1.5 font-mono text-[10px]">
-          <span className="inline-flex items-center gap-2 font-bold text-[var(--text-secondary)]">
-            <span
-              className={`h-2 w-2 rounded-full ${
-                tsunami?.active ? 'animate-ping bg-[var(--sev-critical)]' : 'bg-[var(--accent)]'
-              }`}
-            />
-            PROGRESI PROFIL GELOMBANG PASUT &amp; DART BUOY
-          </span>
-          <span
-            className={`font-bold ${
-              tsunami?.active ? 'text-[var(--sev-critical)]' : 'text-[var(--accent)]'
-            }`}
-          >
-            {tsunami?.active
-              ? `LONJAKAN +${(tsunami.wave_anomaly ?? 0).toFixed(2)}m · PROPAGASI AKTIF`
-              : 'HARMONIK PASUT NOMINAL'}
-          </span>
-        </div>
-        <canvas ref={canvasRef} className="block h-[84px] w-full" />
-      </div>
+      {isSimulasi && (
+        <p className="t-meta mt-4 flex flex-wrap items-center gap-2">
+          <span className="drill-chip">Simulasi</span>
+          {surgedCount > 0
+            ? `${surgedCount} stasiun diberi lonjakan latihan — nilai latihan, bukan hasil pemodelan dan bukan pengamatan IOC.`
+            : 'Belum ada lonjakan latihan pada fase skenario ini.'}
+        </p>
+      )}
 
-      {/* Filter & Search Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 py-4">
-        <div className="relative min-w-[220px] flex-1 sm:max-w-xs">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]" />
+        <div className="relative min-w-[220px] flex-1 @xl:max-w-xs">
+          <label htmlFor={searchId} className="sr-only">
+            Cari stasiun pasang surut
+          </label>
+          <Search
+            className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-muted)]"
+            aria-hidden="true"
+          />
           <input
+            id={searchId}
             type="search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Cari pelabuhan, pulau, atau kode..."
-            aria-label="Cari stasiun pasang surut"
-            className="w-full rounded-full border border-[var(--border-hairline)] bg-[var(--surface-2)] py-1.5 pl-9 pr-3 text-xs text-[var(--text-primary)] outline-none focus:border-[var(--accent-border)]"
+            placeholder="Cari pelabuhan, pulau, atau kode…"
+            className="min-h-8 w-full rounded-full border border-[var(--border-hairline)] bg-[var(--surface-2)] py-1.5 pl-9 pr-3 text-xs text-[var(--text-primary)] focus:border-[var(--accent-border)]"
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          {(
-            [
-              { id: 'ALL', label: `Semua (${baseStations.length})` },
-              { id: 'ANOMALY', label: `Anomali (${anomalyCount})` },
-              { id: 'NOMINAL', label: `Nominal (${baseStations.length - anomalyCount})` },
-            ] as const
-          ).map((btn) => (
-            <button
-              key={btn.id}
-              type="button"
-              onClick={() => setStatusFilter(btn.id)}
-              className={`rounded-full px-3 py-1 text-[11px] font-semibold transition-colors ${
-                statusFilter === btn.id
-                  ? 'bg-[var(--accent-strong)] text-white'
-                  : 'bg-[var(--surface-2)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-              }`}
-            >
-              {btn.label}
-            </button>
-          ))}
-        </div>
+        {isSimulasi && (
+          <div role="group" aria-label="Saring stasiun (latihan)" className="flex flex-wrap items-center gap-1.5">
+            {(
+              [
+                { id: 'ALL', label: `Semua (${rows.length})` },
+                { id: 'SURGED', label: `Lonjakan latihan (${surgedCount})` },
+                { id: 'UNCHANGED', label: `Tanpa lonjakan (${rows.length - surgedCount})` },
+              ] as const
+            ).map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                aria-pressed={activeFilter === option.id}
+                onClick={() => setDrillFilter(option.id)}
+                className={`min-h-8 rounded-full border px-3 text-xs font-semibold transition-colors ${
+                  activeFilter === option.id
+                    ? 'border-[var(--accent-border)] bg-[var(--accent-muted)] text-[var(--accent)]'
+                    : 'border-[var(--border-hairline)] bg-[var(--surface-2)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Table */}
-      <div className="overflow-x-auto">
+      <div id={tableId}>
+        {/* A four-column table cannot fit a phone: each station becomes one stacked entry there */}
+        <ul className="divide-y divide-[var(--border-hairline)] border-t border-[var(--border-hairline)] @xl:hidden">
+          {displayedStations.length === 0 ? (
+            <li className="t-meta py-8 text-center">Tidak ada stasiun yang sesuai pencarian.</li>
+          ) : (
+            displayedStations.map((station) => {
+              const surged = isSurged(station);
+              return (
+                <li
+                  key={station.code}
+                  className={`flex items-center gap-3 py-3 ${surged ? '-mx-2 rounded-lg bg-[var(--drill-bg)] px-2' : ''}`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="t-data text-[var(--text-primary)]">{station.code.toUpperCase()}</span>
+                      <span className="t-data text-[var(--text-secondary)]">
+                        {formatDecimal(station.baseLevelMeters, 2)} m{' '}
+                        <span className="t-meta font-sans font-normal text-[var(--text-muted)]">
+                          {levelHeading.toLowerCase()}
+                        </span>
+                      </span>
+                    </div>
+                    <p className="t-body mt-0.5">{station.name}</p>
+                    <p className="t-meta text-[var(--text-muted)]">
+                      {station.source === 'IOC_LIVE' ? 'IOC' : 'Cadangan bawaan'}
+                      {station.lastUpdated ? ` · data terakhir ${formatWibDateTime(station.lastUpdated)}` : ''}
+                    </p>
+                    {surged && (
+                      <p className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                        <span className="drill-chip">Simulasi</span>
+                        <span className="t-data text-[var(--drill)]">{formatMetresText(station.anomaly)}</span>
+                        <span className="t-meta text-[var(--text-muted)]">nilai latihan</span>
+                      </p>
+                    )}
+                  </div>
+                  {onFocusMap && (
+                    <button
+                      type="button"
+                      onClick={() => onFocusMap(station.lat, station.lon)}
+                      aria-label={`Fokuskan peta ke ${station.name}`}
+                      className="inline-flex min-h-9 shrink-0 items-center gap-1 rounded-full border border-[var(--border-hairline)] bg-[var(--surface-2)] px-3 text-[12px] font-semibold text-[var(--accent)]"
+                    >
+                      <Crosshair className="h-3.5 w-3.5" aria-hidden="true" />
+                      Lihat
+                    </button>
+                  )}
+                </li>
+              );
+            })
+          )}
+        </ul>
+
+        <div className="hidden overflow-x-auto @xl:block">
         <table className="w-full border-collapse text-left text-xs">
+          <caption className="sr-only">
+            Stasiun pasang surut Indonesia yang terdaftar di IOC
+            {levelKind === 'reference' ? '; nilai acuan, bukan pengamatan langsung' : ''}
+          </caption>
           <thead>
-            <tr className="border-b border-[var(--border-hairline)] font-mono text-[10px] font-semibold text-[var(--text-muted)] uppercase">
-              <th className="py-2.5 pr-4">Kode</th>
-              <th className="py-2.5 pr-4">Lokasi Stasiun</th>
-              <th className="py-2.5 pr-4">Muka Air</th>
-              <th className="py-2.5 pr-4">Anomali</th>
-              <th className="py-2.5 pr-4">Status</th>
-              {onFocusMap && <th className="py-2.5 text-right">Peta</th>}
+            <tr className="border-b border-[var(--border-hairline)]">
+              <th scope="col" className="t-micro py-2.5 pr-4">Kode</th>
+              <th scope="col" className="t-micro py-2.5 pr-4">Lokasi stasiun</th>
+              <th scope="col" className="t-micro py-2.5 pr-4">{levelHeading}</th>
+              {isSimulasi && (
+                <th scope="col" className="t-micro py-2.5 pr-4">Lonjakan (latihan)</th>
+              )}
+              <th scope="col" className="t-micro py-2.5 pr-4">Sumber daftar</th>
+              {onFocusMap && (
+                <th scope="col" className="t-micro py-2.5 text-right">Peta</th>
+              )}
             </tr>
           </thead>
           <tbody className="divide-y divide-[var(--border-hairline)]">
             {displayedStations.length === 0 ? (
               <tr>
-                <td
-                  colSpan={onFocusMap ? 6 : 5}
-                  className="py-8 text-center text-xs text-[var(--text-muted)]"
-                >
-                  Tidak ada stasiun yang sesuai filter pencarian.
+                <td colSpan={columnCount} className="t-meta py-8 text-center">
+                  Tidak ada stasiun yang sesuai pencarian.
                 </td>
               </tr>
             ) : (
-              displayedStations.map((st) => (
-                <tr
-                  key={st.code}
-                  className={
-                    st.isAnomaly
-                      ? 'bg-[var(--sev-critical-bg)]'
-                      : 'hover:bg-[var(--surface-2)]/70'
-                  }
-                >
-                  <td className="py-2.5 pr-4 font-mono font-bold text-[var(--accent)]">
-                    {st.code.toUpperCase()}
-                  </td>
-                  <td className="py-2.5 pr-4">
-                    <div className="font-medium text-[var(--text-primary)]">{st.name}</div>
-                    <div className="font-mono text-[10px] text-[var(--text-muted)] tabular-nums">
-                      {st.type.toUpperCase()} · {st.lat.toFixed(2)}, {st.lon.toFixed(2)}
-                    </div>
-                  </td>
-                  <td
-                    className={`py-2.5 pr-4 font-mono font-bold tabular-nums ${
-                      st.isAnomaly ? 'text-[var(--sev-critical)]' : 'text-[var(--text-primary)]'
-                    }`}
+              displayedStations.map((station) => {
+                const surged = isSurged(station);
+                return (
+                  <tr
+                    key={station.code}
+                    className={surged ? 'bg-[var(--drill-bg)]' : 'hover:bg-[var(--surface-subtle)]'}
                   >
-                    {st.level}
-                  </td>
-                  <td
-                    className={`py-2.5 pr-4 font-mono font-semibold tabular-nums ${
-                      st.isAnomaly ? 'text-[var(--sev-critical)]' : 'text-[var(--text-muted)]'
-                    }`}
-                  >
-                    {st.anomaly}
-                  </td>
-                  <td className="py-2.5 pr-4">
-                    <span
-                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-mono text-[10px] font-bold ${
-                        st.isAnomaly
-                          ? 'bg-[var(--sev-critical-bg)] text-[var(--sev-critical)]'
-                          : 'bg-[var(--sev-normal-bg)] text-[var(--sev-normal)]'
-                      }`}
-                    >
-                      {st.isAnomaly && (
-                        <AlertTriangle className="h-3 w-3 animate-pulse" />
-                      )}
-                      {st.status}
-                    </span>
-                  </td>
-                  {onFocusMap && (
-                    <td className="py-2.5 text-right">
-                      <button
-                        type="button"
-                        onClick={() => onFocusMap(st.lat, st.lon)}
-                        className="inline-flex items-center gap-1 rounded-full bg-[var(--surface-2)] px-2.5 py-1 text-[11px] font-semibold text-[var(--accent)] hover:bg-[var(--surface-3)]"
-                        title={`Fokuskan peta ke ${st.name}`}
-                      >
-                        <Crosshair className="h-3 w-3" />
-                        <span>Lihat</span>
-                      </button>
+                    <th scope="row" className="t-data py-2.5 pr-4 text-[var(--text-primary)]">
+                      {station.code.toUpperCase()}
+                    </th>
+                    <td className="py-2.5 pr-4">
+                      <div className="font-medium text-[var(--text-primary)]">{station.name}</div>
+                      <div className="text-[11px] text-[var(--text-muted)]">
+                        {station.type} ·{' '}
+                        <span className="font-mono tabular-nums">
+                          {formatDecimal(station.lat, 2)}, {formatDecimal(station.lon, 2)}
+                        </span>
+                      </div>
                     </td>
-                  )}
-                </tr>
-              ))
+                    <td className="t-data py-2.5 pr-4 text-[var(--text-secondary)]">
+                      {formatDecimal(station.baseLevelMeters, 2)} m
+                    </td>
+                    {isSimulasi && (
+                      <td className="py-2.5 pr-4">
+                        {surged ? (
+                          <span className="inline-flex flex-wrap items-center gap-1.5">
+                            <span className="drill-chip">Simulasi</span>
+                            <span className="t-data text-[var(--drill)]">
+                              {formatMetresText(station.anomaly)}
+                            </span>
+                            <span className="text-[11px] text-[var(--text-muted)]">nilai latihan</span>
+                          </span>
+                        ) : (
+                          <span className="text-[var(--text-muted)]">—</span>
+                        )}
+                      </td>
+                    )}
+                    <td className="py-2.5 pr-4">
+                      <div className="text-[var(--text-secondary)]">
+                        {station.source === 'IOC_LIVE' ? 'IOC' : 'Cadangan bawaan'}
+                      </div>
+                      {station.lastUpdated && (
+                        <div className="text-[11px] text-[var(--text-muted)]">
+                          data terakhir {formatWibDateTime(station.lastUpdated)}
+                        </div>
+                      )}
+                    </td>
+                    {onFocusMap && (
+                      <td className="py-2.5 text-right">
+                        <button
+                          type="button"
+                          onClick={() => onFocusMap(station.lat, station.lon)}
+                          aria-label={`Fokuskan peta ke ${station.name}`}
+                          className="inline-flex min-h-7 items-center gap-1 rounded-full border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2.5 text-[11px] font-semibold text-[var(--accent)] hover:bg-[var(--surface-3)]"
+                        >
+                          <Crosshair className="h-3 w-3" aria-hidden="true" />
+                          <span>Lihat</span>
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
-      {/* Expand Toggle */}
-      {!searchQuery.trim() && statusFilter === 'ALL' && filteredStations.length > 7 && (
+      {!isNarrowed && filteredStations.length > COLLAPSED_ROWS && (
         <div className="mt-4 flex justify-center border-t border-[var(--border-hairline)] pt-3">
           <button
             type="button"
+            aria-expanded={showAllRows}
+            aria-controls={tableId}
             onClick={() => setShowAllRows((prev) => !prev)}
-            className="inline-flex items-center gap-1.5 rounded-full bg-[var(--surface-2)] px-4 py-1.5 text-xs font-semibold text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-[var(--border-hairline)] bg-[var(--surface-2)] px-4 text-xs font-semibold text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
           >
             <span>
               {showAllRows
-                ? 'Ringkas daftar pasut'
-                : `Tampilkan seluruh ${filteredStations.length} stasiun IOC UNESCO`}
+                ? 'Ringkas daftar stasiun'
+                : `Tampilkan seluruh ${filteredStations.length} stasiun`}
             </span>
             <ChevronDown
               className={`h-3.5 w-3.5 transition-transform ${showAllRows ? 'rotate-180' : ''}`}
+              aria-hidden="true"
             />
           </button>
         </div>

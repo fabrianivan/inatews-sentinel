@@ -37,7 +37,7 @@ export interface FeedHealth {
 export const FEED_INFO: Record<FeedKey, { label: string; role: string; href?: string }> = {
   bmkg: {
     label: 'BMKG',
-    role: 'Gempa terkini dan daftar gempa M≥5',
+    role: 'Gempa terkini, daftar gempa M≥5 dan daftar gempa dirasakan',
     href: 'https://www.bmkg.go.id/gempabumi',
   },
   usgs: { label: 'USGS', role: 'Katalog regional sebagai pembanding' },
@@ -48,7 +48,7 @@ export const FEED_INFO: Record<FeedKey, { label: string; role: string; href?: st
   },
   pvmbg: {
     label: 'PVMBG',
-    role: 'Laporan erupsi MAGMA Indonesia',
+    role: 'Laporan erupsi MAGMA Indonesia; seismogram langsung dan kamera gunung dibaca saat panel gunung dibuka',
     href: 'https://magma.esdm.go.id',
   },
   weather: { label: 'Open-Meteo', role: 'Cuaca pesisir' },

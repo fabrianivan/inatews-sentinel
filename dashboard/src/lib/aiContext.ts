@@ -11,16 +11,16 @@
  */
 
 import type { AIAnalysis, BMKGGempaDetail } from './types';
-import type { LiveTelemetrySnapshot } from './telemetry';
+import { toBMKGDetail, type LiveTelemetrySnapshot } from './telemetry';
 import {
   OFFICIAL_LEVEL_LABEL,
   TSUNAMI_LEVEL_ADVICE,
   classifyPotensi,
-  isTsunamiPotential,
   tsunamiLevelFromHeight,
   type TsunamiWarningLevel,
 } from './severity';
 import { formatAge, formatDecimal, toMillis, type TimeInput } from './time';
+import { findTsunamiStatement, isSameQuake } from './tsunamiNotice';
 
 export type AIProviderId = 'gemini' | 'bedrock';
 
@@ -92,6 +92,11 @@ export function getProviderModelLabel(provider: AIProviderId): string {
     : 'Google Gemini 2.5 Flash';
 }
 
+/** Label for text a model really wrote; anything else carries AUTO_SUMMARY_MODEL_LABEL. */
+export function getLiveModelLabel(provider: AIProviderId): string {
+  return `${getProviderModelLabel(provider)} (Live API)`;
+}
+
 // ---------------------------------------------------------------------------
 // REAL mode — facts with their source
 // ---------------------------------------------------------------------------
@@ -101,15 +106,25 @@ interface LiveFacts {
   latest: BMKGGempaDetail | null;
   /** "BMKG: M5,4 · 10 km · laut 98 km BaratDaya Melonguane · 3 jam lalu" */
   quake: string;
-  /** BMKG's "Potensi" text, verbatim; empty when there is none. */
+  /** BMKG's "Potensi" text for the latest report, verbatim; empty when there is none. */
   potensi: string;
-  /** BMKG states tsunami potential for the latest quake. */
+  /**
+   * The BMKG record whose tsunami-potential statement may still be in force. It can be an
+   * earlier earthquake than `latest`: an aftershock replaces the latest report within
+   * minutes while the warning stands, so BMKG's M ≥ 5 list is read as well.
+   */
+  statement: BMKGGempaDetail | null;
+  /** True when that statement belongs to an earthquake other than the latest report. */
+  statementIsEarlier: boolean;
+  /** A BMKG tsunami-potential statement may be in force. */
   tsunamiStated: boolean;
   catalogue: string;
   ocean: string;
   weather: string;
   volcanoes: string;
   index: string;
+  /** False when the attention level is unknown: the index then has no meaning and is not printed. */
+  indexAvailable: boolean;
   hasQuakeData: boolean;
 }
 
@@ -127,14 +142,24 @@ function quakeDetail(quake: BMKGGempaDetail, now: TimeInput): string {
   ].join(' · ');
 }
 
+/**
+ * The quake a client sent along with its question. The context arrives in a request body,
+ * so it is reshaped rather than trusted, and a drill context's synthesized quake is never
+ * used: it must not be reported as BMKG's.
+ */
+function suppliedQuake(context: TelemetryPromptContext | undefined): BMKGGempaDetail | null {
+  if (context?.mode === 'SIMULASI') return null;
+  const quake: unknown = context?.latestQuake;
+  if (quake === null || typeof quake !== 'object' || Array.isArray(quake)) return null;
+  return toBMKGDetail(quake as Record<string, unknown>);
+}
+
 function collectLiveFacts(
   snapshot: LiveTelemetrySnapshot,
   context: TelemetryPromptContext | undefined,
   now: TimeInput
 ): LiveFacts {
-  // A drill context carries a synthesized quake; it must never be reported as BMKG's.
-  const supplied = context?.mode === 'SIMULASI' ? null : context?.latestQuake;
-  const candidate = supplied ?? snapshot.earthquakes.latest_bmkg;
+  const candidate = suppliedQuake(context) ?? snapshot.earthquakes.latest_bmkg;
   const latest = candidate && !candidate.seeded ? candidate : null;
 
   const bmkg = snapshot.earthquakes.recent_bmkg.filter((event) => !event.seeded);
@@ -147,11 +172,17 @@ function collectLiveFacts(
     new Set(snapshot.volcanoes.filter((v) => v.source !== 'SEEDED').map((v) => v.volcano_name))
   );
 
+  const statement = findTsunamiStatement(latest, bmkg, toMillis(now) ?? Date.now());
+  // The index is banded by the attention level; with the level unknown it reads 0 and means nothing.
+  const indexAvailable = hasQuakeData && snapshot.status.risk_level !== 'UNKNOWN';
+
   return {
     latest,
     quake: latest ? `BMKG: ${quakeDetail(latest, now)}` : 'BMKG: data gempa terkini tidak tersedia',
     potensi: latest?.Potensi?.trim() ?? '',
-    tsunamiStated: latest !== null && isTsunamiPotential(latest.Potensi),
+    statement,
+    statementIsEarlier: statement !== null && (latest === null || !isSameQuake(statement, latest)),
+    tsunamiStated: statement !== null,
     catalogue:
       listed.length > 0
         ? `Daftar gempa terkini: ${bmkg.length} dari BMKG, ${usgs.length} dari USGS; terbesar M${formatDecimal(Math.max(...listed.map((event) => event.magnitude)))}`
@@ -168,14 +199,30 @@ function collectLiveFacts(
       volcanoNames.length > 0
         ? `PVMBG (MAGMA): laporan letusan terbaru — ${volcanoNames.slice(0, 3).join(', ')}`
         : 'PVMBG (MAGMA): laporan letusan tidak tersedia',
-    index: hasQuakeData
+    index: indexAvailable
       ? `Indeks aktivitas (heuristik): ${formatDecimal(snapshot.activityIndex.overall_percentage, 0)}/100 — hitungan dasbor, bukan pengukuran`
       : 'Indeks aktivitas (heuristik): tidak tersedia',
+    indexAvailable,
     hasQuakeData,
   };
 }
 
-function liveAssessment(facts: LiveFacts): string {
+/**
+ * The statement, attributed to the earthquake it was made for — used when that is not the
+ * latest report, whose own "Potensi" text would otherwise read as the current word on tsunami.
+ */
+function earlierStatementLine(facts: LiveFacts, now: TimeInput): string | null {
+  if (!facts.statement || !facts.statementIsEarlier) return null;
+  return `Pernyataan tsunami BMKG untuk gempa sebelumnya (${quakeDetail(facts.statement, now)}): "${facts.statement.Potensi.trim()}" — status terkini hanya ada di buletin BMKG`;
+}
+
+function liveAssessment(facts: LiveFacts, now: TimeInput): string {
+  if (facts.statement && facts.statementIsEarlier) {
+    const latestNote = facts.latest
+      ? ` Keterangan pada gempa terkini${facts.potensi ? ` ("${facts.potensi}")` : ''} hanya berlaku untuk gempa itu dan tidak mengakhiri pernyataan tersebut.`
+      : '';
+    return `BMKG menyatakan untuk gempa ${quakeDetail(facts.statement, now)}: "${facts.statement.Potensi.trim()}".${latestNote} Ringkasan ini tidak menambahkan perkiraan tinggi gelombang, waktu tiba atau wilayah terdampak — ikuti peringatan dini tsunami resmi BMKG dan arahan BPBD setempat.`;
+  }
   if (!facts.latest) {
     return 'Data gempa BMKG tidak tersedia, sehingga tidak ada penilaian yang dapat diberikan. Periksa kanal resmi BMKG.';
   }
@@ -197,8 +244,8 @@ function liveAssessment(facts: LiveFacts): string {
 
 function liveStatus(facts: LiveFacts, riskLevel: string): string {
   if (facts.tsunamiStated) return 'CRITICAL';
-  // Without BMKG data the picture is unknown, not routine.
-  if (!facts.hasQuakeData) return 'UNKNOWN';
+  // Without usable BMKG data the picture is unknown, not routine — a USGS-only payload included.
+  if (!facts.hasQuakeData || riskLevel === 'UNKNOWN') return 'UNKNOWN';
   return riskLevel === 'CRITICAL' || riskLevel === 'HIGH' || riskLevel === 'ELEVATED' ? riskLevel : 'NORMAL';
 }
 
@@ -212,8 +259,27 @@ interface ActiveDrill {
 }
 
 function activeDrill(context: TelemetryPromptContext | undefined): ActiveDrill | null {
-  if (context?.mode !== 'SIMULASI' || !context.scenario) return null;
-  return { scenario: context.scenario, phase: context.phase ?? null };
+  const scenario = context?.mode === 'SIMULASI' ? context.scenario : null;
+  // The context arrives in a request body, so what these templates print or index is checked.
+  if (
+    !scenario ||
+    typeof scenario.name !== 'string' ||
+    typeof scenario.faultZone !== 'string' ||
+    !Number.isFinite(scenario.magnitude) ||
+    !Number.isFinite(scenario.depth) ||
+    !Number.isFinite(scenario.tsunamiHeight) ||
+    !Array.isArray(scenario.affectedZones)
+  ) {
+    return null;
+  }
+  const phase = context?.phase;
+  const phaseUsable =
+    phase !== null &&
+    phase !== undefined &&
+    typeof phase.shortLabel === 'string' &&
+    typeof phase.title === 'string' &&
+    Number.isFinite(phase.activityLevel);
+  return { scenario, phase: phaseUsable ? phase : null };
 }
 
 /** The per-phase table predates `tsunamiFactor` in the context and covers callers that do not send it. */
@@ -242,13 +308,20 @@ function drillSeaLevelLine(drill: ActiveDrill): string {
     : 'Sensor skenario: belum ada anomali muka laut pada fase latihan ini';
 }
 
+/**
+ * A warning level exists only once a bulletin carries it: between the mainshock
+ * and PD-1 the threat is in force but nothing has been issued. Callers that do
+ * not send `bulletin` are treated as before.
+ */
 function drillLevel({ scenario, phase }: ActiveDrill): TsunamiWarningLevel | null {
-  return phase?.tsunamiActive ? tsunamiLevelFromHeight(scenario.tsunamiHeight) : null;
+  if (!phase?.tsunamiActive || phase.bulletin === null) return null;
+  return tsunamiLevelFromHeight(scenario.tsunamiHeight);
 }
 
 function drillLevelLine(drill: ActiveDrill): string | null {
   const level = drillLevel(drill);
-  return level ? `Tingkat peringatan skenario: tingkat ${OFFICIAL_LEVEL_LABEL[level]} (latihan)` : null;
+  if (level) return `Tingkat peringatan skenario: tingkat ${OFFICIAL_LEVEL_LABEL[level]} (latihan)`;
+  return drill.phase?.tsunamiActive ? 'Tingkat peringatan skenario: buletin latihan belum terbit' : null;
 }
 
 function drillZonesLine({ scenario }: ActiveDrill, limit = scenario.affectedZones.length): string {
@@ -316,7 +389,8 @@ export function formatContextBrief(
   return [
     'Mode Operasi: REAL — umpan publik',
     facts.quake,
-    ...(facts.potensi ? [`Keterangan BMKG (kutipan): "${facts.potensi}"`] : []),
+    ...(facts.potensi ? [`Keterangan BMKG untuk gempa terkini (kutipan): "${facts.potensi}"`] : []),
+    ...present([earlierStatementLine(facts, now)]),
     ...(facts.latest?.Dirasakan ? [`BMKG, dirasakan (MMI): "${facts.latest.Dirasakan}"`] : []),
     facts.catalogue,
     facts.ocean,
@@ -394,7 +468,9 @@ function liveTopicLines(topic: Topic, facts: LiveFacts): string[] {
       return [
         'Dasbor ini tidak mengeluarkan perintah evakuasi. Keputusan evakuasi ada pada pemerintah daerah / BPBD berdasarkan peringatan resmi BMKG.',
         ...(facts.tsunamiStated
-          ? ['BMKG menyatakan potensi tsunami untuk gempa ini — ikuti peringatan resmi BMKG dan arahan BPBD setempat.']
+          ? [
+              `BMKG menyatakan potensi tsunami untuk ${facts.statementIsEarlier ? 'gempa sebelumnya' : 'gempa ini'} — ikuti peringatan resmi BMKG dan arahan BPBD setempat.`,
+            ]
           : []),
       ];
     case 'infrastructure':
@@ -477,12 +553,14 @@ export function buildContextAwareFallbackAnswer(params: {
     );
   }
 
-  const facts = collectLiveFacts(params.snapshot, params.context, params.now ?? new Date());
+  const now = params.now ?? new Date();
+  const facts = collectLiveFacts(params.snapshot, params.context, now);
   return bulleted(
     `[${params.kind === 'agent' ? 'RINGKASAN OTOMATIS AGEN' : 'RINGKASAN OTOMATIS'} — bukan jawaban AI]`,
     [
       facts.quake,
       ...(facts.potensi ? [`Keterangan BMKG: "${facts.potensi}"`] : []),
+      ...present([earlierStatementLine(facts, now)]),
       ...liveTopicLines(topic, facts),
       'Saran sistem: pantau buletin BMKG dan koordinasikan dengan BPBD setempat sesuai SOP. Keputusan pada BMKG / BPBD.',
     ]
@@ -519,7 +597,7 @@ export async function generateHybridCopilotReply(params: {
     if (llmText) {
       return {
         answer: drill ? withDrillPrefix(llmText) : llmText,
-        model: `${getProviderModelLabel(params.provider)} (Live API)`,
+        model: getLiveModelLabel(params.provider),
         latencyMs: Date.now() - startedAt,
       };
     }
@@ -544,17 +622,19 @@ export function buildLiveAIAnalysis(params: {
 }): AIAnalysis {
   const now = params.now ?? new Date();
   const facts = collectLiveFacts(params.snapshot, undefined, now);
-  const { latest } = facts;
+  const { latest, statement } = facts;
   const magnitude = latest ? parseFloat(latest.Magnitude) : NaN;
+  const earlierStatement = earlierStatementLine(facts, now);
 
   return {
     status: liveStatus(facts, params.snapshot.status.risk_level),
-    threat_summary: facts.tsunamiStated && latest
-      ? `BMKG menyatakan potensi tsunami — ${quakeDetail(latest, now)}. Ikuti peringatan resmi BMKG.`
+    threat_summary: statement
+      ? `BMKG menyatakan potensi tsunami — ${quakeDetail(statement, now)}. Ikuti peringatan resmi BMKG.`
       : facts.quake,
     observations: [
       `${facts.quake}.`,
       ...(facts.potensi ? [`Keterangan BMKG: "${facts.potensi}"`] : []),
+      ...(earlierStatement ? [`${earlierStatement}.`] : []),
       ...(latest?.Dirasakan ? [`BMKG, dirasakan (MMI): "${latest.Dirasakan}"`] : []),
       `${facts.catalogue}.`,
       `${facts.ocean}.`,
@@ -562,7 +642,7 @@ export function buildLiveAIAnalysis(params: {
       `${facts.volcanoes}.`,
       `${facts.index}.`,
     ],
-    assessment: liveAssessment(facts),
+    assessment: liveAssessment(facts, now),
     recommendations: facts.tsunamiStated
       ? [
           'Ikuti peringatan dini tsunami resmi BMKG sebagai satu-satunya rujukan status.',
@@ -629,7 +709,7 @@ export function buildLiveAIAnalysis(params: {
       },
       {
         indicator: 'Indeks aktivitas (heuristik)',
-        value: facts.hasQuakeData
+        value: facts.indexAvailable
           ? `${formatDecimal(params.snapshot.activityIndex.overall_percentage, 0)}/100`
           : 'tidak tersedia',
         change: 'hitungan dasbor',
